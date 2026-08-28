@@ -1,0 +1,77 @@
+﻿# ============================================================
+# Wildfire Early Warning Platform -- .gitignore
+# ============================================================
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+pip-wheel-metadata/
+.eggs/
+
+# SAM Build Artifacts
+.aws-sam/
+samconfig.toml.bak
+
+# Node / Frontend
+node_modules/
+frontend/dist/
+frontend/.env.local
+frontend/.env.*.local
+.npm/
+
+# Environment & Secrets (NEVER COMMIT THESE)
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+*.env
+!.env.example
+
+# Test Artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+*.xml
+junit*.xml
+coverage.xml
+
+# IDE & Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Logs
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Terraform (if added later)
+*.tfstate
+*.tfstate.backup
+.terraform/
+.terraform.lock.hcl

@@ -1,0 +1,800 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Wildfire Early Warning Platform — Complete AWS SAM Infrastructure.
+  Uses Lambda Function URLs (always-free), DynamoDB Provisioned (always-free 25 WCU/RCU),
+  SNS email alerts, arm64 Graviton2 Lambdas, and CloudFront.
+
+# ============================================================
+# PARAMETERS
+# ============================================================
+Parameters:
+  FirmsApiKey:
+    Type: String
+    NoEcho: true
+    Description: "NASA FIRMS API key (register free at firms.modaps.eosdis.nasa.gov)"
+
+  AlertEmail:
+    Type: String
+    Description: "Email address for wildfire alert notifications"
+
+  Environment:
+    Type: String
+    Default: prod
+    AllowedValues:
+      - dev
+      - prod
+    Description: "Deployment environment"
+
+# ============================================================
+# GLOBALS
+# ============================================================
+Globals:
+  Function:
+    Runtime: python3.12
+    Architectures:
+      - arm64
+    MemorySize: 256
+    Timeout: 30
+    Environment:
+      Variables:
+        HOTSPOTS_TABLE: !Ref WildfireHotspotsTable
+        SIMULATION_CACHE_TABLE: !Ref SimulationCacheTable
+        ALERT_ZONES_TABLE: !Ref AlertZonesTable
+        ALERT_DEDUP_TABLE: !Ref AlertDedupTable
+        GEOJSON_BUCKET: !Ref GeoJsonCacheBucket
+        SNS_TOPIC_ARN: !Ref WildfireAlertsTopic
+        AWS_ACCOUNT_ID: !Ref AWS::AccountId
+        ENVIRONMENT: !Ref Environment
+    Layers:
+      - !Ref SharedLayer
+
+# ============================================================
+# RESOURCES
+# ============================================================
+Resources:
+
+  # ----------------------------------------------------------
+  # LAMBDA LAYER — shared utilities (boto3, numpy, scipy, etc.)
+  # ----------------------------------------------------------
+  SharedLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: wildfire-shared
+      ContentUri: ../backend/shared/
+      CompatibleRuntimes:
+        - python3.12
+      CompatibleArchitectures:
+        - arm64
+      RetentionPolicy: Delete
+    Metadata:
+      BuildMethod: python3.12
+
+  # ----------------------------------------------------------
+  # LAMBDA FUNCTION 1 — FIRMS Ingestion (scheduled, no URL)
+  # ----------------------------------------------------------
+  FirmsIngestionFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "wildfire-firms-ingestion-${Environment}"
+      Description: "Fetches NASA FIRMS hotspot data and stores it in DynamoDB"
+      ContentUri: ../backend/ingestion/
+      Handler: handler.handler
+      MemorySize: 512
+      Timeout: 300
+      Environment:
+        Variables:
+          FIRMS_API_KEY: !Ref FirmsApiKey
+      Policies:
+        - Version: "2012-10-17"
+          Statement:
+            - Sid: DynamoDBHotspotsAccess
+              Effect: Allow
+              Action:
+                - dynamodb:PutItem
+                - dynamodb:UpdateItem
+                - dynamodb:BatchWriteItem
+                - dynamodb:GetItem
+                - dynamodb:Query
+              Resource:
+                - !GetAtt WildfireHotspotsTable.Arn
+                - !Sub "${WildfireHotspotsTable.Arn}/index/*"
+            - Sid: S3GeoJsonPut
+              Effect: Allow
+              Action:
+                - s3:PutObject
+                - s3:GetObject
+                - s3:DeleteObject
+              Resource: !Sub "${GeoJsonCacheBucket.Arn}/*"
+            - Sid: CloudWatchLogs
+              Effect: Allow
+              Action:
+                - logs:CreateLogGroup
+                - logs:CreateLogStream
+                - logs:PutLogEvents
+              Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/wildfire-firms-ingestion-${Environment}:*"
+      Events:
+        IngestionSchedule:
+          Type: ScheduleV2
+          Properties:
+            Name: !Sub "wildfire-ingestion-schedule-${Environment}"
+            Description: "Triggers FIRMS data ingestion every 3 hours"
+            ScheduleExpression: "rate(3 hours)"
+            FlexibleTimeWindow:
+              Mode: FLEXIBLE
+              MaximumWindowInMinutes: 30
+            State: ENABLED
+
+  FirmsIngestionFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/wildfire-firms-ingestion-${Environment}"
+      RetentionInDays: 7
+
+  # ----------------------------------------------------------
+  # LAMBDA FUNCTION 2 — Simulation (Function URL, POST)
+  # ----------------------------------------------------------
+  SimulationFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "wildfire-simulation-${Environment}"
+      Description: "Runs fire spread simulation using Rothermel model (NumPy/SciPy)"
+      ContentUri: ../backend/simulation/
+      Handler: handler.handler
+      MemorySize: 1024
+      Timeout: 60
+      FunctionUrlConfig:
+        AuthType: NONE
+        Cors:
+          AllowOrigins:
+            - "*"
+          AllowMethods:
+            - POST
+            - OPTIONS
+          AllowHeaders:
+            - Content-Type
+          MaxAge: 86400
+      Policies:
+        - Version: "2012-10-17"
+          Statement:
+            - Sid: DynamoDBSimCacheAccess
+              Effect: Allow
+              Action:
+                - dynamodb:PutItem
+                - dynamodb:GetItem
+                - dynamodb:UpdateItem
+                - dynamodb:DeleteItem
+                - dynamodb:Query
+                - dynamodb:Scan
+              Resource:
+                - !GetAtt SimulationCacheTable.Arn
+            - Sid: CloudWatchLogs
+              Effect: Allow
+              Action:
+                - logs:CreateLogGroup
+                - logs:CreateLogStream
+                - logs:PutLogEvents
+              Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/wildfire-simulation-${Environment}:*"
+
+  SimulationFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/wildfire-simulation-${Environment}"
+      RetentionInDays: 7
+
+  # ----------------------------------------------------------
+  # LAMBDA FUNCTION 3 — Hotspots API (Function URL, GET)
+  # ----------------------------------------------------------
+  HotspotsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "wildfire-hotspots-${Environment}"
+      Description: "Returns FIRMS hotspot data filtered by bounding box and time range"
+      ContentUri: ../backend/hotspots/
+      Handler: handler.handler
+      MemorySize: 256
+      Timeout: 15
+      FunctionUrlConfig:
+        AuthType: NONE
+        Cors:
+          AllowOrigins:
+            - "*"
+          AllowMethods:
+            - GET
+            - OPTIONS
+          AllowHeaders:
+            - Content-Type
+          MaxAge: 180
+      Policies:
+        - Version: "2012-10-17"
+          Statement:
+            - Sid: DynamoDBHotspotsReadOnly
+              Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:Query
+                - dynamodb:Scan
+                - dynamodb:BatchGetItem
+              Resource:
+                - !GetAtt WildfireHotspotsTable.Arn
+                - !Sub "${WildfireHotspotsTable.Arn}/index/*"
+            - Sid: S3GeoJsonRead
+              Effect: Allow
+              Action:
+                - s3:GetObject
+              Resource: !Sub "${GeoJsonCacheBucket.Arn}/*"
+            - Sid: CloudWatchLogs
+              Effect: Allow
+              Action:
+                - logs:CreateLogGroup
+                - logs:CreateLogStream
+                - logs:PutLogEvents
+              Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/wildfire-hotspots-${Environment}:*"
+
+  HotspotsFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/wildfire-hotspots-${Environment}"
+      RetentionInDays: 7
+
+  # ----------------------------------------------------------
+  # LAMBDA FUNCTION 4 — Alerts (Function URL + scheduled + DynamoDB stream)
+  # ----------------------------------------------------------
+  AlertsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "wildfire-alerts-${Environment}"
+      Description: "Manages alert zones and sends SNS notifications for new hotspots"
+      ContentUri: ../backend/alerts/
+      Handler: handler.handler
+      MemorySize: 256
+      Timeout: 120
+      FunctionUrlConfig:
+        AuthType: NONE
+        Cors:
+          AllowOrigins:
+            - "*"
+          AllowMethods:
+            - GET
+            - POST
+            - DELETE
+            - OPTIONS
+          AllowHeaders:
+            - Content-Type
+          MaxAge: 86400
+      Policies:
+        - Version: "2012-10-17"
+          Statement:
+            - Sid: DynamoDBAlertZonesAccess
+              Effect: Allow
+              Action:
+                - dynamodb:PutItem
+                - dynamodb:GetItem
+                - dynamodb:UpdateItem
+                - dynamodb:DeleteItem
+                - dynamodb:Query
+                - dynamodb:Scan
+                - dynamodb:BatchWriteItem
+                - dynamodb:BatchGetItem
+              Resource:
+                - !GetAtt AlertZonesTable.Arn
+            - Sid: DynamoDBAlertDedupAccess
+              Effect: Allow
+              Action:
+                - dynamodb:PutItem
+                - dynamodb:GetItem
+                - dynamodb:UpdateItem
+                - dynamodb:DeleteItem
+                - dynamodb:Query
+                - dynamodb:Scan
+              Resource:
+                - !GetAtt AlertDedupTable.Arn
+            - Sid: DynamoDBHotspotsRead
+              Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:Query
+                - dynamodb:Scan
+                - dynamodb:BatchGetItem
+              Resource:
+                - !GetAtt WildfireHotspotsTable.Arn
+                - !Sub "${WildfireHotspotsTable.Arn}/index/*"
+            - Sid: DynamoDBStreamAccess
+              Effect: Allow
+              Action:
+                - dynamodb:GetRecords
+                - dynamodb:GetShardIterator
+                - dynamodb:DescribeStream
+                - dynamodb:ListStreams
+              Resource: !GetAtt WildfireHotspotsTable.StreamArn
+            - Sid: SNSPublish
+              Effect: Allow
+              Action:
+                - sns:Publish
+              Resource: !Ref WildfireAlertsTopic
+            - Sid: CloudWatchLogs
+              Effect: Allow
+              Action:
+                - logs:CreateLogGroup
+                - logs:CreateLogStream
+                - logs:PutLogEvents
+              Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/wildfire-alerts-${Environment}:*"
+      Events:
+        AlertsSchedule:
+          Type: ScheduleV2
+          Properties:
+            Name: !Sub "wildfire-alerts-schedule-${Environment}"
+            Description: "Periodically checks hotspots against alert zones"
+            ScheduleExpression: "rate(30 minutes)"
+            FlexibleTimeWindow:
+              Mode: FLEXIBLE
+              MaximumWindowInMinutes: 5
+            State: ENABLED
+        HotspotsStream:
+          Type: DynamoDB
+          Properties:
+            Stream: !GetAtt WildfireHotspotsTable.StreamArn
+            StartingPosition: LATEST
+            BatchSize: 10
+            FilterCriteria:
+              Filters:
+                - Pattern: '{"eventName":["INSERT"]}'
+            BisectBatchOnFunctionError: true
+            MaximumRetryAttempts: 3
+
+  AlertsFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/wildfire-alerts-${Environment}"
+      RetentionInDays: 7
+
+  # ----------------------------------------------------------
+  # DYNAMODB TABLE 1 — Wildfire Hotspots (primary data store)
+  # ----------------------------------------------------------
+  WildfireHotspotsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "WildfireHotspots-${Environment}"
+      BillingMode: PROVISIONED
+      ProvisionedThroughput:
+        ReadCapacityUnits: 5
+        WriteCapacityUnits: 5
+      AttributeDefinitions:
+        - AttributeName: hotspot_id
+          AttributeType: S
+        - AttributeName: region_key
+          AttributeType: S
+        - AttributeName: acq_datetime
+          AttributeType: S
+      KeySchema:
+        - AttributeName: hotspot_id
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: region-date-index
+          KeySchema:
+            - AttributeName: region_key
+              KeyType: HASH
+            - AttributeName: acq_datetime
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+          ProvisionedThroughput:
+            ReadCapacityUnits: 3
+            WriteCapacityUnits: 3
+      TimeToLiveSpecification:
+        AttributeName: expires_at
+        Enabled: true
+      StreamSpecification:
+        StreamViewType: NEW_IMAGE
+      Tags:
+        - Key: Project
+          Value: WildfirePlatform
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ----------------------------------------------------------
+  # DYNAMODB TABLE 2 — Simulation Cache
+  # ----------------------------------------------------------
+  SimulationCacheTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "SimulationCache-${Environment}"
+      BillingMode: PROVISIONED
+      ProvisionedThroughput:
+        ReadCapacityUnits: 3
+        WriteCapacityUnits: 3
+      AttributeDefinitions:
+        - AttributeName: sim_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: sim_id
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: expires_at
+        Enabled: true
+      Tags:
+        - Key: Project
+          Value: WildfirePlatform
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ----------------------------------------------------------
+  # DYNAMODB TABLE 3 — Alert Zones
+  # ----------------------------------------------------------
+  AlertZonesTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "AlertZones-${Environment}"
+      BillingMode: PROVISIONED
+      ProvisionedThroughput:
+        ReadCapacityUnits: 2
+        WriteCapacityUnits: 2
+      AttributeDefinitions:
+        - AttributeName: zone_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: zone_id
+          KeyType: HASH
+      Tags:
+        - Key: Project
+          Value: WildfirePlatform
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ----------------------------------------------------------
+  # DYNAMODB TABLE 4 — Alert Dedup (prevents repeat notifications within 1h)
+  # ----------------------------------------------------------
+  AlertDedupTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "AlertDedup-${Environment}"
+      BillingMode: PROVISIONED
+      ProvisionedThroughput:
+        ReadCapacityUnits: 2
+        WriteCapacityUnits: 2
+      AttributeDefinitions:
+        - AttributeName: dedup_key
+          AttributeType: S
+      KeySchema:
+        - AttributeName: dedup_key
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: expires_at
+        Enabled: true
+      Tags:
+        - Key: Project
+          Value: WildfirePlatform
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ----------------------------------------------------------
+  # S3 BUCKET 1 — Frontend Static Website
+  # ----------------------------------------------------------
+  FrontendBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "wildfire-frontend-${AWS::AccountId}-${AWS::Region}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Suspended
+      Tags:
+        - Key: Project
+          Value: WildfirePlatform
+        - Key: Environment
+          Value: !Ref Environment
+
+  FrontendBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref FrontendBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowCloudFrontOAC
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub "${FrontendBucket.Arn}/*"
+            Condition:
+              StringEquals:
+                "AWS:SourceArn": !Sub "arn:aws:cloudfront::${AWS::AccountId}:distribution/${CloudFrontDistribution}"
+
+  # ----------------------------------------------------------
+  # S3 BUCKET 2 — GeoJSON Cache (private, 8-day lifecycle)
+  # ----------------------------------------------------------
+  GeoJsonCacheBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "wildfire-geojson-cache-${AWS::AccountId}-${AWS::Region}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteOldGeoJsonObjects
+            Status: Enabled
+            ExpirationInDays: 8
+      Tags:
+        - Key: Project
+          Value: WildfirePlatform
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ----------------------------------------------------------
+  # CLOUDFRONT OAC — Origin Access Control for S3
+  # ----------------------------------------------------------
+  CloudFrontOAC:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub "wildfire-frontend-oac-${Environment}"
+        Description: "OAC for Wildfire Platform S3 Frontend"
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  # ----------------------------------------------------------
+  # CLOUDFRONT — Origin Request Policy (forward headers to Lambda URLs)
+  # ----------------------------------------------------------
+  LambdaOriginRequestPolicy:
+    Type: AWS::CloudFront::OriginRequestPolicy
+    Properties:
+      OriginRequestPolicyConfig:
+        Name: !Sub "wildfire-lambda-origin-request-policy-${Environment}"
+        Comment: "Forwards CORS headers and all query strings to Lambda Function URLs"
+        HeadersConfig:
+          HeaderBehavior: whitelist
+          Headers:
+            - origin
+            - access-control-request-headers
+            - access-control-request-method
+        QueryStringsConfig:
+          QueryStringBehavior: all
+        CookiesConfig:
+          CookieBehavior: none
+
+  # ----------------------------------------------------------
+  # CLOUDFRONT — Cache Policy for Hotspots (180s TTL, keyed on query strings)
+  # ----------------------------------------------------------
+  HotspotsCachePolicy:
+    Type: AWS::CloudFront::CachePolicy
+    Properties:
+      CachePolicyConfig:
+        Name: !Sub "wildfire-hotspots-cache-policy-${Environment}"
+        Comment: "Cache hotspot responses for 180 seconds keyed on query strings"
+        DefaultTTL: 180
+        MinTTL: 0
+        MaxTTL: 300
+        ParametersInCacheKeyAndForwardedToOrigin:
+          EnableAcceptEncodingGzip: true
+          EnableAcceptEncodingBrotli: true
+          HeadersConfig:
+            HeaderBehavior: none
+          QueryStringsConfig:
+            QueryStringBehavior: all
+          CookiesConfig:
+            CookieBehavior: none
+
+  # ----------------------------------------------------------
+  # CLOUDFRONT DISTRIBUTION
+  # ----------------------------------------------------------
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Comment: !Sub "Wildfire Early Warning Platform — ${Environment}"
+        Enabled: true
+        HttpVersion: http2and3
+        PriceClass: PriceClass_100
+        DefaultRootObject: index.html
+
+        Origins:
+          # Origin 1: S3 Frontend (OAC)
+          - Id: S3FrontendOrigin
+            DomainName: !GetAtt FrontendBucket.RegionalDomainName
+            S3OriginConfig:
+              OriginAccessIdentity: ""
+            OriginAccessControlId: !GetAtt CloudFrontOAC.Id
+
+          # Origin 2: Hotspots Lambda Function URL
+          - Id: HotspotsLambdaOrigin
+            DomainName: !Select
+              - 2
+              - !Split
+                - "/"
+                - !GetAtt HotspotsFunctionUrl.FunctionUrl
+            CustomOriginConfig:
+              HTTPSPort: 443
+              OriginProtocolPolicy: https-only
+              OriginSSLProtocols:
+                - TLSv1.2
+
+          # Origin 3: Simulation Lambda Function URL
+          - Id: SimulationLambdaOrigin
+            DomainName: !Select
+              - 2
+              - !Split
+                - "/"
+                - !GetAtt SimulationFunctionUrl.FunctionUrl
+            CustomOriginConfig:
+              HTTPSPort: 443
+              OriginProtocolPolicy: https-only
+              OriginSSLProtocols:
+                - TLSv1.2
+
+          # Origin 4: Alerts Lambda Function URL
+          - Id: AlertsLambdaOrigin
+            DomainName: !Select
+              - 2
+              - !Split
+                - "/"
+                - !GetAtt AlertsFunctionUrl.FunctionUrl
+            CustomOriginConfig:
+              HTTPSPort: 443
+              OriginProtocolPolicy: https-only
+              OriginSSLProtocols:
+                - TLSv1.2
+
+        # Default: serve S3 frontend
+        DefaultCacheBehavior:
+          TargetOriginId: S3FrontendOrigin
+          ViewerProtocolPolicy: redirect-to-https
+          # AWS managed CachingOptimized policy
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
+          AllowedMethods:
+            - GET
+            - HEAD
+          CachedMethods:
+            - GET
+            - HEAD
+          Compress: true
+
+        CacheBehaviors:
+          # /hotspots* — GET, cached 180s
+          - PathPattern: "/hotspots*"
+            TargetOriginId: HotspotsLambdaOrigin
+            ViewerProtocolPolicy: redirect-to-https
+            CachePolicyId: !Ref HotspotsCachePolicy
+            OriginRequestPolicyId: !Ref LambdaOriginRequestPolicy
+            AllowedMethods:
+              - GET
+              - HEAD
+              - OPTIONS
+            CachedMethods:
+              - GET
+              - HEAD
+            Compress: true
+
+          # /simulate-spread* — POST, no caching
+          - PathPattern: "/simulate-spread*"
+            TargetOriginId: SimulationLambdaOrigin
+            ViewerProtocolPolicy: redirect-to-https
+            # AWS managed CachingDisabled policy
+            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+            OriginRequestPolicyId: !Ref LambdaOriginRequestPolicy
+            AllowedMethods:
+              - GET
+              - HEAD
+              - OPTIONS
+              - PUT
+              - PATCH
+              - POST
+              - DELETE
+            CachedMethods:
+              - GET
+              - HEAD
+            Compress: true
+
+          # /alert-zones* — GET/POST/DELETE, no caching
+          - PathPattern: "/alert-zones*"
+            TargetOriginId: AlertsLambdaOrigin
+            ViewerProtocolPolicy: redirect-to-https
+            # AWS managed CachingDisabled policy
+            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+            OriginRequestPolicyId: !Ref LambdaOriginRequestPolicy
+            AllowedMethods:
+              - GET
+              - HEAD
+              - OPTIONS
+              - PUT
+              - PATCH
+              - POST
+              - DELETE
+            CachedMethods:
+              - GET
+              - HEAD
+            Compress: true
+
+        # SPA routing — serve index.html on 403/404
+        CustomErrorResponses:
+          - ErrorCode: 403
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+            ErrorCachingMinTTL: 10
+          - ErrorCode: 404
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+            ErrorCachingMinTTL: 10
+
+      Tags:
+        - Key: Project
+          Value: WildfirePlatform
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ----------------------------------------------------------
+  # SNS TOPIC — Wildfire Email Alerts
+  # ----------------------------------------------------------
+  WildfireAlertsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub "WildfireAlerts-${Environment}"
+      DisplayName: "Wildfire Early Warning Alert"
+      Subscription:
+        - Protocol: email
+          Endpoint: !Ref AlertEmail
+      Tags:
+        - Key: Project
+          Value: WildfirePlatform
+        - Key: Environment
+          Value: !Ref Environment
+
+# ============================================================
+# OUTPUTS
+# ============================================================
+Outputs:
+
+  CloudFrontURL:
+    Description: "CloudFront distribution URL (primary application endpoint)"
+    Value: !Sub "https://${CloudFrontDistribution.DomainName}"
+    Export:
+      Name: !Sub "${AWS::StackName}-CloudFrontURL"
+
+  HotspotsFunctionUrl:
+    Description: "Direct Lambda Function URL for Hotspots API"
+    Value: !GetAtt HotspotsFunctionUrl.FunctionUrl
+    Export:
+      Name: !Sub "${AWS::StackName}-HotspotsFunctionUrl"
+
+  SimulationFunctionUrl:
+    Description: "Direct Lambda Function URL for Simulation API"
+    Value: !GetAtt SimulationFunctionUrl.FunctionUrl
+    Export:
+      Name: !Sub "${AWS::StackName}-SimulationFunctionUrl"
+
+  AlertsFunctionUrl:
+    Description: "Direct Lambda Function URL for Alerts API"
+    Value: !GetAtt AlertsFunctionUrl.FunctionUrl
+    Export:
+      Name: !Sub "${AWS::StackName}-AlertsFunctionUrl"
+
+  FrontendBucketName:
+    Description: "S3 bucket name for frontend static assets"
+    Value: !Ref FrontendBucket
+    Export:
+      Name: !Sub "${AWS::StackName}-FrontendBucketName"
+
+  CloudFrontDistributionId:
+    Description: "CloudFront distribution ID (for cache invalidation)"
+    Value: !Ref CloudFrontDistribution
+    Export:
+      Name: !Sub "${AWS::StackName}-CloudFrontDistributionId"
+
+  WildfireAlertsTopicArn:
+    Description: "SNS topic ARN for wildfire alerts"
+    Value: !Ref WildfireAlertsTopic
+    Export:
+      Name: !Sub "${AWS::StackName}-WildfireAlertsTopicArn"
+
+  GeoJsonCacheBucketName:
+    Description: "S3 bucket name for GeoJSON cache"
+    Value: !Ref GeoJsonCacheBucket
+    Export:
+      Name: !Sub "${AWS::StackName}-GeoJsonCacheBucketName"

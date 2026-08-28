@@ -1,0 +1,23 @@
+﻿{
+  "version": "2.0",
+  "requestContext": {
+    "http": {
+      "method": "GET",
+      "path": "/hotspots",
+      "protocol": "HTTP/1.1",
+      "sourceIp": "127.0.0.1",
+      "userAgent": "curl/8.0.0"
+    },
+    "requestId": "local-test-hotspots-id",
+    "stage": "$default",
+    "time": "25/Aug/2026:12:00:00 +0000",
+    "timeEpoch": 1756123200000
+  },
+  "queryStringParameters": {
+    "min_lon": "-125",
+    "min_lat": "30",
+    "max_lon": "-100",
+    "max_lat": "50"
+  },
+  "isBase64Encoded": false
+}

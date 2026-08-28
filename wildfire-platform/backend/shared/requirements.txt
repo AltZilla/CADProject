@@ -1,0 +1,4 @@
+boto3>=1.34
+pydantic[email]>=2.6
+shapely>=2.0
+requests>=2.31

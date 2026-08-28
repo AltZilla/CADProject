@@ -1,0 +1,22 @@
+﻿{
+  "version": "2.0",
+  "requestContext": {
+    "http": {
+      "method": "POST",
+      "path": "/simulate-spread",
+      "protocol": "HTTP/1.1",
+      "sourceIp": "127.0.0.1",
+      "userAgent": "curl/8.0.0"
+    },
+    "requestId": "local-test-request-id",
+    "stage": "$default",
+    "time": "25/Aug/2026:12:00:00 +0000",
+    "timeEpoch": 1756123200000
+  },
+  "headers": {
+    "content-type": "application/json",
+    "accept": "application/json"
+  },
+  "body": "{\"origin\":{\"type\":\"Point\",\"coordinates\":[-121.4567,39.8123]},\"wind_speed_ms\":5.0,\"wind_direction_deg\":225,\"slope_deg\":10.0,\"fuel_type\":\"SHRUB_CHAPARRAL\",\"hours\":24}",
+  "isBase64Encoded": false
+}

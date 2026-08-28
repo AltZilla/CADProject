@@ -1,0 +1,10 @@
+﻿{
+  "version": "0",
+  "id": "test-event-id",
+  "source": "aws.scheduler",
+  "account": "123456789012",
+  "time": "2026-08-25T12:00:00Z",
+  "region": "us-east-1",
+  "detail-type": "Scheduled Event",
+  "detail": {}
+}

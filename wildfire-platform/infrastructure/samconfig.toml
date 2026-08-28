@@ -1,0 +1,21 @@
+﻿version = 0.1
+
+[default]
+[default.global.parameters]
+stack_name = "wildfire-platform"
+
+[default.build.parameters]
+cached = true
+parallel = true
+
+[default.deploy.parameters]
+capabilities = "CAPABILITY_IAM CAPABILITY_AUTO_EXPAND"
+confirm_changeset = true
+resolve_s3 = true
+s3_prefix = "wildfire-platform"
+region = "us-east-1"
+parameter_overrides = "Environment=prod"
+
+# NOTE: On first run use: sam deploy --guided
+# This will prompt for FirmsApiKey and AlertEmail, then save them here.
+# DO NOT commit samconfig.toml after --guided if it contains sensitive values.
