@@ -1,4 +1,4 @@
-﻿# ============================================================
+# ============================================================
 # Wildfire Early Warning Platform -- .gitignore
 # ============================================================
 
@@ -16,25 +16,27 @@ build/
 pip-wheel-metadata/
 .eggs/
 
-# SAM Build Artifacts
+# SAM / Lambda Build Artifacts
 .aws-sam/
 samconfig.toml.bak
+backend/layer_build/
+backend/temp_*/
+*.zip
 
 # Node / Frontend
 node_modules/
 frontend/dist/
-frontend/.env.local
-frontend/.env.*.local
+frontend/node_modules/
 .npm/
 
 # Environment & Secrets (NEVER COMMIT THESE)
 .env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
+.env*
 *.env
+*.env.*
+frontend/.env*
 !.env.example
+!frontend/.env.example
 
 # Test Artifacts
 .pytest_cache/
