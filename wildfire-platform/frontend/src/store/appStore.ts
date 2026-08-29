@@ -1,12 +1,24 @@
 import { create } from 'zustand';
 import type { Hotspot } from '../types/hotspot';
-import type { SimulationRequest, SimulationResult } from '../types/simulation';
+import type { FuelType, SimulationRequest, SimulationResult } from '../types/simulation';
 import type { AlertZone } from '../types/alert';
 
 interface AppState {
   // Map
   mapBbox: [number, number, number, number] | null; // [min_lon, min_lat, max_lon, max_lat]
   setMapBbox: (bbox: [number, number, number, number]) => void;
+
+  // Context menu
+  contextMenuPos: { x: number; y: number; lng: number; lat: number } | null;
+  setContextMenuPos: (pos: { x: number; y: number; lng: number; lat: number } | null) => void;
+
+  // Auto fuel detection
+  detectedFuelType: FuelType | null;
+  setDetectedFuelType: (ft: FuelType | null) => void;
+
+  // Active sidebar tab (so we can switch to simulation programmatically)
+  activeTab: 'hotspots' | 'simulation' | 'alerts';
+  setActiveTab: (tab: 'hotspots' | 'simulation' | 'alerts') => void;
 
   // Hotspots
   selectedHotspot: Hotspot | null;
@@ -31,12 +43,22 @@ interface AppState {
   setIsDrawingZone: (v: boolean) => void;
   drawnZonePoints: [number, number][]; // [lon, lat] pairs
   addDrawnZonePoint: (point: [number, number]) => void;
+  undoDrawnZonePoint: () => void;
   resetDrawnZonePoints: () => void;
 }
 
 export const useAppStore = create<AppState>((set) => ({
   mapBbox: null,
   setMapBbox: (bbox) => set({ mapBbox: bbox }),
+
+  contextMenuPos: null,
+  setContextMenuPos: (pos) => set({ contextMenuPos: pos }),
+
+  detectedFuelType: null,
+  setDetectedFuelType: (ft) => set({ detectedFuelType: ft }),
+
+  activeTab: 'hotspots',
+  setActiveTab: (tab) => set({ activeTab: tab }),
 
   selectedHotspot: null,
   setSelectedHotspot: (h) => set({ selectedHotspot: h }),
@@ -65,5 +87,7 @@ export const useAppStore = create<AppState>((set) => ({
   drawnZonePoints: [],
   addDrawnZonePoint: (point) =>
     set((state) => ({ drawnZonePoints: [...state.drawnZonePoints, point] })),
+  undoDrawnZonePoint: () =>
+    set((state) => ({ drawnZonePoints: state.drawnZonePoints.slice(0, -1) })),
   resetDrawnZonePoints: () => set({ drawnZonePoints: [] }),
 }));

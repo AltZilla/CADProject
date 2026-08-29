@@ -1,4 +1,4 @@
-﻿import os
+import os
 import sys
 import json
 import time
@@ -68,51 +68,55 @@ def load_global_nasa_firms():
     """Fetch live NASA FIRMS Global 24h active fire feed (~100k+ global hotspots)."""
     global HOTSPOT_LATS, HOTSPOT_LONS, HOTSPOT_FRPS, HOTSPOT_BRIGHTS, HOTSPOT_CONFS, HOTSPOT_DATES, HOTSPOT_SATS, HOTSPOT_DAYNIGHTS, LAST_FIRMS_FETCH
     url = "https://firms.modaps.eosdis.nasa.gov/data/active_fire/noaa-20-viirs-nrt/csv/J1_VIIRS_C2_Global_24h.csv"
-    try:
-        print("[NASA FIRMS Global] Downloading 24h satellite active fire feed (Worldwide)...")
-        resp = requests.get(url, timeout=30, headers={"User-Agent": "WildfirePlatform/1.0"})
-        if resp.status_code == 200:
-            reader = list(csv.DictReader(StringIO(resp.text)))
-            
-            lats, lons, frps, brights, confs = [], [], [], [], []
-            dates, sats, daynights = [], [], []
-            
-            for row in reader:
-                try:
-                    lat = float(row['latitude'])
-                    lon = float(row['longitude'])
-                    frp = float(row.get('frp', 10.0))
-                    bright = float(row.get('bright_ti4', 320.0))
-                    conf_raw = row.get('confidence', 'n').lower()
-                    conf = 90 if conf_raw == 'h' else (60 if conf_raw == 'n' else 35)
-                    acq_date = row.get('acq_date', '2026-08-26')
-                    acq_time = row.get('acq_time', '0000').zfill(4)
-                    
-                    lats.append(lat)
-                    lons.append(lon)
-                    frps.append(frp)
-                    brights.append(bright)
-                    confs.append(conf)
-                    dates.append(f"{acq_date}T{acq_time[:2]}:{acq_time[2:]}:00Z")
-                    sats.append("VIIRS NOAA-20")
-                    daynights.append(row.get('daynight', 'D'))
-                except Exception:
-                    continue
-                    
-            if lats:
-                HOTSPOT_LATS = np.array(lats, dtype=np.float32)
-                HOTSPOT_LONS = np.array(lons, dtype=np.float32)
-                HOTSPOT_FRPS = np.array(frps, dtype=np.float32)
-                HOTSPOT_BRIGHTS = np.array(brights, dtype=np.float32)
-                HOTSPOT_CONFS = np.array(confs, dtype=np.int16)
-                HOTSPOT_DATES = dates
-                HOTSPOT_SATS = sats
-                HOTSPOT_DAYNIGHTS = daynights
-                LAST_FIRMS_FETCH = time.time()
-                print(f"[NASA FIRMS Global] Loaded {len(HOTSPOT_LATS)} active fire hotspots worldwide!")
-                return
-    except Exception as e:
-        print(f"[NASA FIRMS Global] Download error: {e}")
+    while True:
+        try:
+            print("[NASA FIRMS Global] Downloading 24h satellite active fire feed (Worldwide)...", flush=True)
+            resp = requests.get(url, timeout=30, headers={"User-Agent": "WildfirePlatform/1.0"})
+            if resp.status_code == 200:
+                reader = list(csv.DictReader(StringIO(resp.text)))
+                
+                lats, lons, frps, brights, confs = [], [], [], [], []
+                dates, sats, daynights = [], [], []
+                
+                for row in reader:
+                    try:
+                        lat = float(row['latitude'])
+                        lon = float(row['longitude'])
+                        frp = float(row.get('frp', 10.0))
+                        bright = float(row.get('bright_ti4', 320.0))
+                        conf_raw = str(row.get('confidence', 'n')).lower()
+                        conf = 90 if conf_raw.startswith('h') else (60 if conf_raw.startswith('n') else 35)
+                        acq_date = row.get('acq_date', '2026-08-26')
+                        acq_time = str(row.get('acq_time', '0000')).zfill(4)
+                        
+                        lats.append(lat)
+                        lons.append(lon)
+                        frps.append(frp)
+                        brights.append(bright)
+                        confs.append(conf)
+                        dates.append(f"{acq_date}T{acq_time[:2]}:{acq_time[2:]}:00Z")
+                        sats.append("VIIRS NOAA-20")
+                        daynights.append(row.get('daynight', 'D'))
+                    except Exception:
+                        continue
+                        
+                if lats:
+                    HOTSPOT_LATS = np.array(lats, dtype=np.float32)
+                    HOTSPOT_LONS = np.array(lons, dtype=np.float32)
+                    HOTSPOT_FRPS = np.array(frps, dtype=np.float32)
+                    HOTSPOT_BRIGHTS = np.array(brights, dtype=np.float32)
+                    HOTSPOT_CONFS = np.array(confs, dtype=np.int16)
+                    HOTSPOT_DATES = dates
+                    HOTSPOT_SATS = sats
+                    HOTSPOT_DAYNIGHTS = daynights
+                    LAST_FIRMS_FETCH = time.time()
+                    print(f"[NASA FIRMS Global] Loaded {len(HOTSPOT_LATS)} active fire hotspots worldwide!", flush=True)
+                    return
+            else:
+                print(f"[NASA FIRMS Global] Status code: {resp.status_code}", flush=True)
+        except Exception as e:
+            print(f"[NASA FIRMS Global] Download error: {e}", flush=True)
+        time.sleep(10)
 
 # Start background fetch
 threading.Thread(target=load_global_nasa_firms, daemon=True).start()
@@ -139,6 +143,7 @@ class WildfireDevHandler(BaseHTTPRequestHandler):
             max_lon = float(query.get('max_lon', [180])[0])
             max_lat = float(query.get('max_lat', [90])[0])
             
+            print(f"[Hotspots Query] min_lon={min_lon}, min_lat={min_lat}, max_lon={max_lon}, max_lat={max_lat} | Total loaded in memory: {len(HOTSPOT_LATS)}", flush=True)
             if len(HOTSPOT_LATS) > 0:
                 # Fast numpy vectorized spatial bounding box filtering
                 in_bbox = (
@@ -279,7 +284,7 @@ class WildfireDevHandler(BaseHTTPRequestHandler):
 
                 start_time = time.time()
                 r, c = engine.get_ignition_cell(origin_lat, origin_lon)
-                arrival_time = engine.run_simulation(ros_8dir, r, c, max_hours=hours)
+                arrival_time = engine.run_simulation(ros_8dir, r, c, max_hours=max(hours, 24.0))
                 
                 cell_ha = (engine.CELL_SIZE_M ** 2) / 10000.0
                 timeframe_areas = {
@@ -308,8 +313,10 @@ class WildfireDevHandler(BaseHTTPRequestHandler):
 
                 result = {
                     "sim_id": str(uuid.uuid4())[:12],
-                    "type": "FeatureCollection",
-                    "features": perimeters.get("features", []),
+                    "perimeters": {
+                        "type": "FeatureCollection",
+                        "features": perimeters.get("features", [])
+                    },
                     "metadata": metadata,
                     "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
                 }

@@ -16,7 +16,7 @@ export default function Button({
   ...props 
 }: ButtonProps) {
   
-  const baseStyle = "inline-flex items-center justify-center font-medium rounded-lg transition-colors focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed";
+  const baseStyle = "inline-flex items-center justify-center font-medium rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-400 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-900 disabled:opacity-50 disabled:cursor-not-allowed";
   
   const variants = {
     default: "bg-orange-500 text-white hover:bg-orange-600",
@@ -35,6 +35,7 @@ export default function Button({
     <button 
       className={`${baseStyle} ${variants[variant]} ${sizes[size]} ${className}`}
       disabled={disabled || loading}
+      aria-busy={loading || undefined}
       {...props}
     >
       {loading ? (

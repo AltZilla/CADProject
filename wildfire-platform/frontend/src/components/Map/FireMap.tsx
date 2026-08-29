@@ -8,6 +8,8 @@ import SimulationLayer from './SimulationLayer';
 import AlertZoneLayer from './AlertZoneLayer';
 import HotspotPopup from '../Panel/HotspotInfoPanel';
 import SimulationResultPanel from '../Panel/SimulationResultPanel';
+import MapContextMenu from './MapContextMenu';
+import MapToolbar from './MapToolbar';
 
 export default function FireMap() {
   const mapRef = useRef<HTMLDivElement>(null);
@@ -20,6 +22,7 @@ export default function FireMap() {
   const isDrawingZone = useAppStore(s => s.isDrawingZone);
   const addDrawnZonePoint = useAppStore(s => s.addDrawnZonePoint);
   const selectedHotspot = useAppStore(s => s.selectedHotspot);
+  const setContextMenuPos = useAppStore(s => s.setContextMenuPos);
 
   useEffect(() => {
     if (!mapRef.current || mapInstance) return;
@@ -63,6 +66,18 @@ export default function FireMap() {
       }
     });
 
+    map.on('contextmenu', (e) => {
+      if (useAppStore.getState().isDrawingZone) return;
+      e.preventDefault();
+      const point = map.project(e.lngLat);
+      setContextMenuPos({
+        x: point.x,
+        y: point.y,
+        lng: e.lngLat.lng,
+        lat: e.lngLat.lat,
+      });
+    });
+
     return () => {
       clearTimeout(timeout);
       map.remove();
@@ -79,6 +94,8 @@ export default function FireMap() {
           {selectedHotspot && <HotspotPopup />}
         </MapContext.Provider>
       )}
+      <MapContextMenu />
+      <MapToolbar />
       <div className="absolute bottom-6 right-2 text-xs text-slate-500 pointer-events-none z-10">
         Wildfire Platform Map
       </div>

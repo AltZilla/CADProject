@@ -39,6 +39,37 @@ export default function AlertZoneLayer() {
           'line-dasharray': [2, 2]
         }
       });
+
+      map.addLayer({
+        id: 'alert-zone-drawing-points',
+        type: 'circle',
+        source: sourceId,
+        filter: ['==', ['get', 'drawingPoint'], true],
+        paint: {
+          'circle-color': '#f97316',
+          'circle-radius': 5,
+          'circle-stroke-color': '#0f172a',
+          'circle-stroke-width': 2,
+        }
+      });
+
+      map.addLayer({
+        id: 'alert-zone-drawing-labels',
+        type: 'symbol',
+        source: sourceId,
+        filter: ['==', ['get', 'drawingPoint'], true],
+        layout: {
+          'text-field': ['to-string', ['get', 'pointIndex']],
+          'text-size': 11,
+          'text-offset': [0, -1.25],
+          'text-anchor': 'bottom',
+        },
+        paint: {
+          'text-color': '#fed7aa',
+          'text-halo-color': '#0f172a',
+          'text-halo-width': 1.5,
+        }
+      });
     }
 
     const features: any[] = alertZones.map(zone => ({
@@ -62,6 +93,14 @@ export default function AlertZoneLayer() {
         type: 'Feature',
         properties: { drawing: true },
         geometry
+      });
+
+      drawnZonePoints.forEach((point, index) => {
+        features.push({
+          type: 'Feature',
+          properties: { drawingPoint: true, pointIndex: index + 1 },
+          geometry: { type: 'Point', coordinates: point }
+        });
       });
     }
 

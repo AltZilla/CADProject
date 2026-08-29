@@ -2,13 +2,14 @@ import React, { useState } from 'react';
 import { useAppStore } from '@/store/appStore';
 import { useAlertZones } from '@/hooks/useAlertZones';
 import Button from '../UI/Button';
-import { PlusCircle, Trash2, MapPin } from 'lucide-react';
+import { PlusCircle, Trash2, MapPin, Undo2 } from 'lucide-react';
 
 export default function AlertZoneEditor() {
   const alertZones = useAppStore(s => s.alertZones);
   const isDrawingZone = useAppStore(s => s.isDrawingZone);
   const setIsDrawingZone = useAppStore(s => s.setIsDrawingZone);
   const drawnZonePoints = useAppStore(s => s.drawnZonePoints);
+  const undoDrawnZonePoint = useAppStore(s => s.undoDrawnZonePoint);
   const resetDrawnZonePoints = useAppStore(s => s.resetDrawnZonePoints);
   
   const { createZone, deleteZone, isCreating, isDeleting } = useAlertZones();
@@ -79,9 +80,16 @@ export default function AlertZoneEditor() {
               <MapPin size={16} className="text-orange-500" />
               Click on map to draw polygon points.
             </p>
-            <p className="text-xs text-slate-500 mb-4">Points added: {drawnZonePoints.length}</p>
+            <p className="text-xs text-slate-500 mb-4">
+              {drawnZonePoints.length < 3
+                ? `${3 - drawnZonePoints.length} more point${3 - drawnZonePoints.length === 1 ? '' : 's'} needed to finish.`
+                : `${drawnZonePoints.length} points added. Ready to finish.`}
+            </p>
             
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
+              <Button size="sm" variant="outline" disabled={drawnZonePoints.length === 0} onClick={undoDrawnZonePoint}>
+                <Undo2 size={14} className="mr-1" /> Undo
+              </Button>
               {drawnZonePoints.length >= 3 && (
                 <Button size="sm" onClick={() => setIsDrawingZone(false)}>Finish Shape</Button>
               )}

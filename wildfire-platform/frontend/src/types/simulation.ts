@@ -12,6 +12,11 @@ export interface SimulationRequest {
 export interface SimulationMetadata {
   max_ros_m_min: number;
   wind_speed_ms: number;
+  wind_speed_kmh?: number;
+  wind_direction_deg?: number;
+  temperature_c?: number;
+  relative_humidity?: number;
+  weather_source?: string;
   fuel_type: FuelType;
   origin: GeoJSON.Point;
   burned_area_ha_6h: number;

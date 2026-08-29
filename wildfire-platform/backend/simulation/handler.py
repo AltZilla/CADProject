@@ -92,7 +92,7 @@ def handler(event: dict, context) -> dict:
         if not fuel:
             return {
                 "statusCode": 400,
-                "headers": cors_headers,
+                "headers": headers,
                 "body": json.dumps({"error": f"Unknown fuel_type: {request.fuel_type}. Valid types: {list(FUEL_MODELS.keys())}"}),
             }
         R0 = get_base_ros(request.fuel_type, moisture_frac=fuel_moisture)
@@ -123,7 +123,7 @@ def handler(event: dict, context) -> dict:
 
         ignition_row, ignition_col = engine.get_ignition_cell(origin_lat, origin_lon)
         arrival_time = engine.run_simulation(
-            ros_8dir, ignition_row, ignition_col, max_hours=float(request.hours)
+            ros_8dir, ignition_row, ignition_col, max_hours=max(float(request.hours), 24.0)
         )
 
         # Metric calculation

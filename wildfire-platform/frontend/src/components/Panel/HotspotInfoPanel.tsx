@@ -3,10 +3,11 @@ import maplibregl from 'maplibre-gl';
 import { useMap } from '../Map/MapContext';
 import { useAppStore } from '@/store/appStore';
 import { useSimulation } from '@/hooks/useSimulation';
-import { fetchLiveWeather, LiveWeather } from '@/api/weather';
+import { detectFuelType, fetchLiveWeather, LiveWeather } from '@/api/weather';
 import { Flame, X, Wind, Thermometer, Droplets, Zap } from 'lucide-react';
 import Button from '../UI/Button';
 import Badge from '../UI/Badge';
+import { formatPoint } from '@/utils/geo';
 
 export default function HotspotInfoPanel() {
   const map = useMap();
@@ -71,11 +72,12 @@ export default function HotspotInfoPanel() {
   if (!hotspot) return null;
 
   const handleAutoSimulate = () => {
+    const fuelType = weather ? detectFuelType(weather) : 'SHRUB_CHAPARRAL';
     const req = {
       origin: { type: 'Point' as const, coordinates: [hotspot.longitude, hotspot.latitude] as [number, number] },
       wind_speed_ms: weather ? weather.wind_speed_ms : 5.0,
       wind_direction_deg: weather ? weather.wind_direction_deg : 225.0,
-      fuel_type: 'SHRUB_CHAPARRAL' as const,
+      fuel_type: fuelType,
       hours: 24 as const
     };
     setSimulationRequest(req);
@@ -103,7 +105,7 @@ export default function HotspotInfoPanel() {
           <div className="flex justify-between py-0.5">
             <span className="text-slate-400">Coordinates:</span>
             <span className="font-mono text-slate-200">
-              {(hotspot.latitude ?? hotspot.lat ?? 0).toFixed(4)}°, {(hotspot.longitude ?? hotspot.lon ?? 0).toFixed(4)}°
+              {formatPoint([(hotspot.longitude ?? hotspot.lon ?? 0), (hotspot.latitude ?? hotspot.lat ?? 0)])}
             </span>
           </div>
           <div className="flex justify-between py-0.5">
@@ -135,6 +137,7 @@ export default function HotspotInfoPanel() {
               <Wind size={13} /> Live Weather (Open-Meteo)
             </span>
             {loadingWeather && <span className="text-[10px] text-slate-500 animate-pulse">Fetching...</span>}
+            {weather?.source.includes('Fallback') && <span className="text-[10px] text-amber-300">Fallback</span>}
           </div>
           
           {weather ? (
