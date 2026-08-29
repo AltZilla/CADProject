@@ -1,9 +1,14 @@
 import React from 'react';
 import { useAppStore } from '@/store/appStore';
 import { useHotspots } from '@/hooks/useHotspots';
-import { Flame, RefreshCw, Crosshair } from 'lucide-react';
+import { Flame, RefreshCw, Crosshair, Mountain } from 'lucide-react';
 
-export default function MapToolbar() {
+interface MapToolbarProps {
+  is3D?: boolean;
+  onToggle3D?: () => void;
+}
+
+export default function MapToolbar({ is3D, onToggle3D }: MapToolbarProps) {
   const isPickingOrigin = useAppStore(s => s.isPickingOrigin);
   const setIsPickingOrigin = useAppStore(s => s.setIsPickingOrigin);
   const { data, refetch, isFetching } = useHotspots();
@@ -39,6 +44,20 @@ export default function MapToolbar() {
       >
         <Crosshair size={14} />
       </button>
+
+      {onToggle3D && (
+        <button
+          onClick={onToggle3D}
+          className={`p-1.5 rounded-full transition-colors ${
+            is3D
+              ? 'text-emerald-400 bg-emerald-500/20'
+              : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+          }`}
+          title={is3D ? 'Switch to 2D' : 'Switch to 3D terrain'}
+        >
+          <Mountain size={14} />
+        </button>
+      )}
 
       {isPickingOrigin && (
         <span className="text-[11px] text-cyan-400 font-medium animate-pulse pr-1">

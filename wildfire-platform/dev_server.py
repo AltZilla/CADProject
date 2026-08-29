@@ -286,13 +286,14 @@ class WildfireDevHandler(BaseHTTPRequestHandler):
                 r, c = engine.get_ignition_cell(origin_lat, origin_lon)
                 arrival_time = engine.run_simulation(ros_8dir, r, c, max_hours=max(hours, 24.0))
                 
+                hourly_timeframes = [float(h) for h in range(1, 25)]
                 cell_ha = (engine.CELL_SIZE_M ** 2) / 10000.0
                 timeframe_areas = {
                     h: float(np.sum(arrival_time <= h * 60.0) * cell_ha)
-                    for h in [6.0, 12.0, 24.0]
+                    for h in hourly_timeframes
                 }
                 
-                perimeters = engine.extract_perimeters(arrival_time, [6.0, 12.0, 24.0], timeframe_areas)
+                perimeters = engine.extract_perimeters(arrival_time, hourly_timeframes, timeframe_areas)
                 duration_ms = int((time.time() - start_time) * 1000)
 
                 metadata = {

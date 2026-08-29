@@ -36,6 +36,14 @@ interface AppState {
   isPickingOrigin: boolean;
   setIsPickingOrigin: (v: boolean) => void;
 
+  // Timeline playback
+  playbackHour: number;
+  setPlaybackHour: (h: number) => void;
+  isPlaying: boolean;
+  setIsPlaying: (v: boolean) => void;
+  playbackSpeed: number;
+  setPlaybackSpeed: (s: number) => void;
+
   // Alert Zones
   alertZones: AlertZone[];
   setAlertZones: (zones: AlertZone[]) => void;
@@ -79,6 +87,13 @@ export const useAppStore = create<AppState>((set) => ({
   setSimulationError: (e) => set({ simulationError: e }),
   isPickingOrigin: false,
   setIsPickingOrigin: (v) => set({ isPickingOrigin: v }),
+
+  playbackHour: 24,
+  setPlaybackHour: (h) => set({ playbackHour: h }),
+  isPlaying: false,
+  setIsPlaying: (v) => set({ isPlaying: v }),
+  playbackSpeed: 1,
+  setPlaybackSpeed: (s) => set({ playbackSpeed: s }),
 
   alertZones: [],
   setAlertZones: (zones) => set({ alertZones: zones }),
