@@ -30,7 +30,7 @@ if 'shared.python.geo_utils' not in sys.modules:
 
 from rothermel import FUEL_MODELS, get_base_ros, wind_phi, slope_phi, compute_effective_vector, compute_ros_8dir
 from elevation import fetch_dem_grid, compute_slope_aspect
-from weather import fetch_live_weather
+from weather import fetch_live_weather, fetch_hourly_forecast
 from fire_engine import FireSpreadEngine
 
 # Fast in-memory numpy storage for Global NASA FIRMS hotspots
@@ -138,12 +138,18 @@ class WildfireDevHandler(BaseHTTPRequestHandler):
         query = parse_qs(parsed.query)
 
         if path == '/hotspots':
-            min_lon = float(query.get('min_lon', [-180])[0])
-            min_lat = float(query.get('min_lat', [-90])[0])
-            max_lon = float(query.get('max_lon', [180])[0])
-            max_lat = float(query.get('max_lat', [90])[0])
+            raw_min_lon = float(query.get('min_lon', [-180])[0])
+            raw_min_lat = float(query.get('min_lat', [-90])[0])
+            raw_max_lon = float(query.get('max_lon', [180])[0])
+            raw_max_lat = float(query.get('max_lat', [90])[0])
+
+            # Normalize so min is always <= max regardless of camera rotation or pitch
+            min_lon = max(-180.0, min(raw_min_lon, raw_max_lon))
+            max_lon = min(180.0, max(raw_min_lon, raw_max_lon))
+            min_lat = max(-89.0, min(raw_min_lat, raw_max_lat))
+            max_lat = min(89.0, max(raw_min_lat, raw_max_lat))
             
-            print(f"[Hotspots Query] min_lon={min_lon}, min_lat={min_lat}, max_lon={max_lon}, max_lat={max_lat} | Total loaded in memory: {len(HOTSPOT_LATS)}", flush=True)
+            print(f"[Hotspots Query] min_lon={min_lon:.2f}, min_lat={min_lat:.2f}, max_lon={max_lon:.2f}, max_lat={max_lat:.2f} | Total loaded: {len(HOTSPOT_LATS)}", flush=True)
             if len(HOTSPOT_LATS) > 0:
                 # Fast numpy vectorized spatial bounding box filtering
                 in_bbox = (
@@ -230,82 +236,123 @@ class WildfireDevHandler(BaseHTTPRequestHandler):
 
         if path in ['/simulate', '/simulate-spread']:
             try:
-                origin = req_json.get('origin', {})
-                coords = origin.get('coordinates', [-121.456, 39.812])
-                origin_lon, origin_lat = float(coords[0]), float(coords[1])
-                
-                # --- AUTO-FETCH LIVE ATMOSPHERIC WEATHER (Open-Meteo) ---
-                live_weather = fetch_live_weather(origin_lat, origin_lon)
-                
-                wind_speed_ms = req_json.get('wind_speed_ms')
-                if wind_speed_ms is None or req_json.get('use_live_weather', True):
-                    wind_speed_ms = live_weather['wind_speed_ms']
-                else:
-                    wind_speed_ms = float(wind_speed_ms)
+                # 1. Parse origin points (supports single Point, MultiPoint, or origins array)
+                origins = req_json.get('origins')
+                origin_obj = req_json.get('origin', {})
+                points: list[tuple[float, float]] = []
 
-                wind_dir_deg = req_json.get('wind_direction_deg')
-                if wind_dir_deg is None or req_json.get('use_live_weather', True):
-                    wind_dir_deg = live_weather['wind_direction_deg']
-                else:
-                    wind_dir_deg = float(wind_dir_deg)
+                if isinstance(origins, list) and len(origins) > 0:
+                    for p in origins:
+                        if isinstance(p, (list, tuple)) and len(p) >= 2:
+                            points.append((float(p[0]), float(p[1])))
+                elif origin_obj:
+                    geom_type = origin_obj.get('type')
+                    coords = origin_obj.get('coordinates', [])
+                    if geom_type == 'MultiPoint' and isinstance(coords, list):
+                        for p in coords:
+                            if isinstance(p, (list, tuple)) and len(p) >= 2:
+                                points.append((float(p[0]), float(p[1])))
+                    elif isinstance(coords, (list, tuple)) and len(coords) >= 2:
+                        if isinstance(coords[0], (list, tuple)):
+                            for p in coords:
+                                points.append((float(p[0]), float(p[1])))
+                        else:
+                            points.append((float(coords[0]), float(coords[1])))
 
-                fuel_moisture = live_weather.get('fuel_moisture_fraction', 0.08)
+                if not points:
+                    points = [(-121.456, 39.812)]
+
+                center_lon = float(np.mean([p[0] for p in points]))
+                center_lat = float(np.mean([p[1] for p in points]))
+
+                # 2. Fetch 24-hour real consecutive hourly meteorological forecast (Open-Meteo)
+                hourly_weather = fetch_hourly_forecast(center_lat, center_lon, hours=24)
+                live_weather = hourly_weather[0] if hourly_weather else fetch_live_weather(center_lat, center_lon)
+
+                user_wind_speed = req_json.get('wind_speed_ms')
+                user_wind_dir = req_json.get('wind_direction_deg')
                 fuel_type = req_json.get('fuel_type', 'SHRUB_CHAPARRAL')
+                fuel = FUEL_MODELS.get(fuel_type, FUEL_MODELS['SHRUB_CHAPARRAL'])
                 hours = float(req_json.get('hours', 24))
 
-                fuel = FUEL_MODELS.get(fuel_type, FUEL_MODELS['SHRUB_CHAPARRAL'])
-                R0 = get_base_ros(fuel_type, fuel_moisture)
-                phi_w = wind_phi(wind_speed_ms, fuel['beta'])
+                engine = FireSpreadEngine(center_lat=center_lat, center_lon=center_lon)
 
-                engine = FireSpreadEngine(center_lat=origin_lat, center_lon=origin_lon)
-
-                # --- AUTO-FETCH LIVE TERRAIN ELEVATION (Open-Elevation DEM) ---
+                # Fetch DEM slope & aspect once for the domain
                 slope_deg = req_json.get('slope_deg')
                 if slope_deg is not None:
                     slope_tan = math.tan(math.radians(float(slope_deg)))
                     slope_tan_grid = np.full((engine.NY, engine.NX), slope_tan, dtype=np.float32)
-                    aspect_grid = np.full((engine.NY, engine.NX), math.radians(90.0 - wind_dir_deg), dtype=np.float32)
+                    ref_dir = float(user_wind_dir if user_wind_dir is not None else live_weather['wind_direction_deg'])
+                    aspect_grid = np.full((engine.NY, engine.NX), math.radians(90.0 - ref_dir), dtype=np.float32)
                 else:
-                    dem = fetch_dem_grid(origin_lat, origin_lon, engine.NY, engine.NX, engine.CELL_SIZE_M)
+                    dem = fetch_dem_grid(center_lat, center_lon, engine.NY, engine.NX, engine.CELL_SIZE_M)
                     slope_tan_grid, aspect_grid = compute_slope_aspect(dem, engine.CELL_SIZE_M)
 
                 phi_s_grid = slope_phi(slope_tan_grid, fuel['beta'])
-                
-                # --- TRUE DOWNWIND DIRECTION (Meteorological to Cartesian) ---
-                travel_bearing_deg = (wind_dir_deg + 180.0) % 360.0
-                wind_travel_cartesian_rad = math.radians(90.0 - travel_bearing_deg)
-                
-                phi_eff_grid, theta_eff_grid = compute_effective_vector(
-                    phi_w, wind_travel_cartesian_rad, phi_s_grid, aspect_grid
-                )
-                
-                # Compute directional ROS with Alexander elliptical fire spread physics
-                ros_8dir = compute_ros_8dir(R0, phi_eff_grid, theta_eff_grid, fuel['beta'])
 
+                # 3. Compute 24 Hourly Directional ROS grids with Alexander physics
+                ros_8dir_hourly = np.zeros((24, 8, engine.NY, engine.NX), dtype=np.float32)
+                for h_idx, hw in enumerate(hourly_weather[:24]):
+                    if user_wind_speed is not None and not req_json.get('use_live_weather', True):
+                        w_speed = float(user_wind_speed)
+                    else:
+                        w_speed = hw['wind_speed_ms']
+
+                    if user_wind_dir is not None and not req_json.get('use_live_weather', True):
+                        w_dir = float(user_wind_dir)
+                    else:
+                        w_dir = hw['wind_direction_deg']
+
+                    f_moisture = hw.get('fuel_moisture_fraction', 0.08)
+                    R0_h = get_base_ros(fuel_type, f_moisture)
+                    phi_w_h = wind_phi(w_speed, fuel['beta'])
+
+                    travel_bearing_deg = (w_dir + 180.0) % 360.0
+                    wind_travel_cartesian_rad = math.radians(90.0 - travel_bearing_deg)
+
+                    phi_eff_h, theta_eff_h = compute_effective_vector(
+                        phi_w_h, wind_travel_cartesian_rad, phi_s_grid, aspect_grid
+                    )
+                    ros_8dir_hourly[h_idx] = compute_ros_8dir(R0_h, phi_eff_h, theta_eff_h, fuel['beta'])
+
+                # 4. Map all ignition points to grid cells
+                ignition_cells = []
+                for pt in points:
+                    r, c = engine.lonlat_to_rc(pt[0], pt[1])
+                    if 0 <= r < engine.NY and 0 <= c < engine.NX:
+                        ignition_cells.append((r, c))
+                if not ignition_cells:
+                    ignition_cells = [(engine.NY // 2, engine.NX // 2)]
+
+                # 5. Continuous Dijkstra arrival-time multi-point solver
                 start_time = time.time()
-                r, c = engine.get_ignition_cell(origin_lat, origin_lon)
-                arrival_time = engine.run_simulation(ros_8dir, r, c, max_hours=max(hours, 24.0))
-                
+                arrival_time = engine.run_simulation(ros_8dir_hourly, ignition_cells, max_hours=max(hours, 24.0))
+
                 hourly_timeframes = [float(h) for h in range(1, 25)]
                 cell_ha = (engine.CELL_SIZE_M ** 2) / 10000.0
                 timeframe_areas = {
                     h: float(np.sum(arrival_time <= h * 60.0) * cell_ha)
                     for h in hourly_timeframes
                 }
-                
+
                 perimeters = engine.extract_perimeters(arrival_time, hourly_timeframes, timeframe_areas)
                 duration_ms = int((time.time() - start_time) * 1000)
 
                 metadata = {
-                    "max_ros_m_min": round(float(np.max(ros_8dir)), 2),
-                    "wind_speed_ms": wind_speed_ms,
-                    "wind_speed_kmh": round(wind_speed_ms * 3.6, 1),
-                    "wind_direction_deg": wind_dir_deg,
+                    "max_ros_m_min": round(float(np.max(ros_8dir_hourly)), 2),
+                    "wind_speed_ms": live_weather['wind_speed_ms'],
+                    "wind_speed_kmh": round(live_weather['wind_speed_ms'] * 3.6, 1),
+                    "wind_direction_deg": live_weather['wind_direction_deg'],
                     "temperature_c": live_weather.get("temperature_c"),
                     "relative_humidity": live_weather.get("relative_humidity"),
-                    "weather_source": live_weather.get("source"),
+                    "weather_source": "Open-Meteo Hourly Forecast (24h Real Meteorological Series)",
                     "fuel_type": fuel_type,
-                    "origin": origin,
+                    "origin": {
+                        "type": "MultiPoint" if len(points) > 1 else "Point",
+                        "coordinates": points if len(points) > 1 else points[0]
+                    },
+                    "ignition_points_count": len(points),
+                    "hourly_weather": hourly_weather,
                     "burned_area_ha_6h": round(timeframe_areas[6.0], 2),
                     "burned_area_ha_12h": round(timeframe_areas[12.0], 2),
                     "burned_area_ha_24h": round(timeframe_areas[24.0], 2),

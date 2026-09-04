@@ -77,30 +77,55 @@ class FireSpreadEngine:
     def run_simulation(
         self,
         ros_8dir: np.ndarray,
-        ignition_row: int,
-        ignition_col: int,
+        ignition_cells: list[tuple[int, int]] | tuple[int, int] | int,
+        ignition_col: int | None = None,
         max_hours: float = 24.0,
     ) -> np.ndarray:
         """
-        Dijkstra arrival-time solver.
+        Continuous Dijkstra arrival-time solver supporting multi-point ignition
+        and dynamic hourly directional ROS grids.
 
         Parameters
         ----------
-        ros_8dir : ndarray, shape (8, NY, NX), units m/min
-        ignition_row, ignition_col : grid coordinates of fire origin
-        max_hours : stop propagating beyond this time limit
+        ros_8dir : ndarray
+            Shape (8, NY, NX) for static weather, or (H, 8, NY, NX) for hourly weather.
+        ignition_cells : list of (r, c) tuples, or single ignition_row int
+        ignition_col : int (optional, when ignition_cells is single ignition_row)
+        max_hours : stop propagating beyond this time limit (hours)
 
         Returns
         -------
         arrival_time : ndarray, shape (NY, NX), units minutes
-                       Cells not reached within max_hours contain np.inf.
         """
-        arrival_time = np.full((self.NY, self.NX), np.inf, dtype=np.float32)
-        arrival_time[ignition_row, ignition_col] = 0.0
+        # Normalize ignition points
+        if isinstance(ignition_cells, int) and ignition_col is not None:
+            cells = [(ignition_cells, ignition_col)]
+        elif isinstance(ignition_cells, tuple):
+            cells = [ignition_cells]
+        elif isinstance(ignition_cells, list):
+            cells = ignition_cells
+        else:
+            cells = [(self.NY // 2, self.NX // 2)]
 
-        pq: list[tuple[float, int, int]] = [(0.0, ignition_row, ignition_col)]
+        # Clamp and filter valid cells within grid
+        valid_cells = [
+            (r, c) for (r, c) in cells
+            if 0 <= r < self.NY and 0 <= c < self.NX
+        ]
+        if not valid_cells:
+            valid_cells = [(self.NY // 2, self.NX // 2)]
+
+        arrival_time = np.full((self.NY, self.NX), np.inf, dtype=np.float32)
+        pq: list[tuple[float, int, int]] = []
+        for r, c in valid_cells:
+            arrival_time[r, c] = 0.0
+            heapq.heappush(pq, (0.0, r, c))
+
         visited = np.zeros((self.NY, self.NX), dtype=bool)
         max_minutes = max_hours * 60.0
+
+        is_hourly = (ros_8dir.ndim == 4)
+        num_hours = ros_8dir.shape[0] if is_hourly else 1
 
         while pq:
             t_curr, r, c = heapq.heappop(pq)
@@ -108,13 +133,19 @@ class FireSpreadEngine:
                 continue
             visited[r, c] = True
             if t_curr > max_minutes:
-                # All remaining items in queue will be >= t_curr, stop early
                 break
+
+            # Dynamic hourly ROS selection based on current spread timestamp
+            if is_hourly:
+                h_idx = min(int(t_curr // 60.0), num_hours - 1)
+                ros_curr = ros_8dir[h_idx]
+            else:
+                ros_curr = ros_8dir
 
             for k, (dr, dc) in enumerate(self.neighbor_offsets):
                 nr, nc = r + dr, c + dc
                 if 0 <= nr < self.NY and 0 <= nc < self.NX:
-                    ros = float(ros_8dir[k, r, c])
+                    ros = float(ros_curr[k, r, c])
                     if ros <= 0.0:
                         continue
                     t_new = t_curr + self.neighbor_dists_m[k] / ros
@@ -123,6 +154,12 @@ class FireSpreadEngine:
                         heapq.heappush(pq, (t_new, nr, nc))
 
         return arrival_time
+
+    def lonlat_to_rc(self, lon: float, lat: float) -> tuple[int, int]:
+        """Convert WGS84 (lon, lat) to grid (row, col) relative to center_lat, center_lon."""
+        r = int(round(self.NY / 2 + (self.center_lat - lat) / (self.CELL_SIZE_M * self.deg_per_m_lat)))
+        c = int(round(self.NX / 2 + (lon - self.center_lon) / (self.CELL_SIZE_M * self.deg_per_m_lon)))
+        return r, c
 
     def _rc_to_lonlat(self, r: float, c: float) -> tuple[float, float]:
         """Convert grid (row, col) to (lon, lat) WGS84."""
@@ -203,12 +240,13 @@ class FireSpreadEngine:
             except Exception:
                 pass  # fall through to bounding-box fallback
 
-            # --- Bounding-box fallback ---
+            # --- Non-degenerate bounding-box fallback ---
             r_idx, c_idx = np.where(mask)
-            r_min, r_max = int(r_idx.min()), int(r_idx.max())
-            c_min, c_max = int(c_idx.min()), int(c_idx.max())
-            lon0, lat0 = self._rc_to_lonlat(r_max, c_min)
-            lon1, lat1 = self._rc_to_lonlat(r_min, c_max)
+            r_min, r_max = float(r_idx.min()), float(r_idx.max())
+            c_min, c_max = float(c_idx.min()), float(c_idx.max())
+            # Buffer by 0.55 cell so a single cell produces a clean visible 50mx50m footprint
+            lon0, lat0 = self._rc_to_lonlat(r_max + 0.55, c_min - 0.55)
+            lon1, lat1 = self._rc_to_lonlat(r_min - 0.55, c_max + 0.55)
             geom = {
                 "type": "Polygon",
                 "coordinates": [[
@@ -221,8 +259,6 @@ class FireSpreadEngine:
         return make_feature_collection(features)
 
     def get_ignition_cell(self, lat: float, lon: float) -> tuple[int, int]:
-        """
-        Convert a WGS84 coordinate to grid (row, col).
-        The ignition point is placed at grid center (NY//2, NX//2).
-        """
-        return self.NY // 2, self.NX // 2
+        """Convert a WGS84 coordinate to grid (row, col)."""
+        return self.lonlat_to_rc(lon, lat)
+

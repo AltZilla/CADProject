@@ -1,6 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import { useAppStore } from '@/store/appStore';
-import { Play, Pause, SkipBack, SkipForward, Flame } from 'lucide-react';
+import { Play, Pause, SkipBack, SkipForward, Flame, Wind } from 'lucide-react';
 
 export default function TimelineControls() {
   const simulationResult = useAppStore(s => s.simulationResult);
@@ -47,10 +47,13 @@ export default function TimelineControls() {
     .filter(f => (f.properties?.timeframe_hours ?? 0) <= playbackHour)
     .reduce((max, f) => Math.max(max, f.properties?.burned_area_ha ?? 0), 0);
 
+  const hourlyList = simulationResult.metadata.hourly_weather;
+  const hourly = hourlyList && hourlyList.length >= playbackHour ? hourlyList[playbackHour - 1] : null;
+
   const speeds = [1, 2, 5, 10];
 
   return (
-    <div className="absolute bottom-5 left-1/2 -translate-x-1/2 z-40 w-[520px] max-w-[calc(100%-2rem)]">
+    <div className="absolute bottom-5 left-1/2 -translate-x-1/2 z-40 w-[560px] max-w-[calc(100%-2rem)]">
       <div className="bg-slate-900/95 backdrop-blur-md border border-slate-700/80 rounded-2xl shadow-2xl px-4 py-3">
         {/* Status line */}
         <div className="flex items-center justify-between mb-2">
@@ -59,6 +62,12 @@ export default function TimelineControls() {
             <span className="text-xs font-semibold text-slate-200">
               +{playbackHour}h into incident
             </span>
+            {hourly && (
+              <span className="text-[10px] text-cyan-300 font-mono flex items-center gap-1 bg-slate-800/90 px-2 py-0.5 rounded-full border border-slate-700/60">
+                <Wind size={10} className="text-cyan-400" />
+                {hourly.wind_speed_kmh} km/h · {Math.round(hourly.wind_direction_deg)}° · {hourly.temperature_c}°C
+              </span>
+            )}
           </div>
           <div className="flex items-center gap-3 text-[11px]">
             <span className="text-orange-400 font-bold">

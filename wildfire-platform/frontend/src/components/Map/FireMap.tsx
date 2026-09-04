@@ -7,7 +7,6 @@ import HotspotLayer from './HotspotLayer';
 import SimulationLayer from './SimulationLayer';
 import AlertZoneLayer from './AlertZoneLayer';
 import HotspotPopup from '../Panel/HotspotInfoPanel';
-import SimulationResultPanel from '../Panel/SimulationResultPanel';
 import MapContextMenu from './MapContextMenu';
 import MapToolbar from './MapToolbar';
 import TimelineControls from '../Simulation/TimelineControls';
@@ -42,11 +41,7 @@ export default function FireMap() {
     });
 
     map.on('load', () => {
-      if (map.getLayer('background')) {
-        map.setPaintProperty('background', 'background-color', '#0f172a');
-      }
-
-      // 3D Terrain source (AWS Terrain RGB — free, no key)
+      // 3D Terrain & Hillshade DEM source (AWS Terrarium — global elevation)
       map.addSource('terrain-dem', {
         type: 'raster-dem',
         tiles: ['https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png'],
@@ -55,24 +50,17 @@ export default function FireMap() {
         maxzoom: 15,
       });
 
-      // Hillshade layer — always visible for depth perception
-      map.addSource('hillshade-source', {
-        type: 'raster-dem',
-        tiles: ['https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png'],
-        encoding: 'terrarium',
-        tileSize: 256,
-        maxzoom: 15,
-      });
+      // Photorealistic 3D hillshade layer
       map.addLayer({
         id: 'hillshade-layer',
         type: 'hillshade',
-        source: 'hillshade-source',
+        source: 'terrain-dem',
         paint: {
-          'hillshade-shadow-color': '#000000',
-          'hillshade-highlight-color': '#334155',
+          'hillshade-shadow-color': '#020617',
+          'hillshade-highlight-color': '#475569',
           'hillshade-accent-color': '#1e293b',
           'hillshade-illumination-direction': 315,
-          'hillshade-exaggeration': 0.3,
+          'hillshade-exaggeration': 0.35,
         },
       }, map.getStyle().layers.find(l => l.type === 'symbol')?.id);
 
@@ -83,12 +71,20 @@ export default function FireMap() {
     let timeout: number;
     const updateBbox = () => {
       const bounds = map.getBounds();
-      setMapBbox([bounds.getWest(), bounds.getSouth(), bounds.getEast(), bounds.getNorth()]);
+      const west = bounds.getWest();
+      const south = bounds.getSouth();
+      const east = bounds.getEast();
+      const north = bounds.getNorth();
+      const min_lon = Math.min(west, east);
+      const max_lon = Math.max(west, east);
+      const min_lat = Math.max(-85, Math.min(south, north));
+      const max_lat = Math.min(85, Math.max(south, north));
+      setMapBbox([min_lon, min_lat, max_lon, max_lat]);
     };
 
     const handleMove = () => {
       clearTimeout(timeout);
-      timeout = window.setTimeout(updateBbox, 500);
+      timeout = window.setTimeout(updateBbox, 800);
     };
 
     map.on('moveend', handleMove);
@@ -135,18 +131,84 @@ export default function FireMap() {
     }
   };
 
-  // Auto-pitch into 3D when simulation result arrives
+  // Seamlessly fly camera to fire simulation, zoom in, and pitch into 3D
   useEffect(() => {
     if (!mapInstance || !simulationResult) return;
-    const windDir = simulationResult.metadata?.wind_direction_deg;
-    if (windDir !== undefined && !is3D) {
-      mapInstance.setTerrain({ source: 'terrain-dem', exaggeration: 1.5 });
-      // Rotate camera to look downwind
-      const bearing = (windDir + 180) % 360;
-      mapInstance.easeTo({ pitch: 50, bearing, duration: 1200 });
-      setIs3D(true);
+
+    // Enable 3D terrain elevation
+    mapInstance.setTerrain({ source: 'terrain-dem', exaggeration: 1.5 });
+    setIs3D(true);
+
+    const windDir = simulationResult.metadata?.wind_direction_deg ?? 0;
+    const bearing = (windDir + 180) % 360;
+
+    const bounds = new maplibregl.LngLatBounds();
+    let hasCoords = false;
+
+    // 1. Extend with all simulation perimeter coordinates
+    const perims = simulationResult.perimeters?.features || [];
+    perims.forEach((f) => {
+      const geom = f.geometry;
+      if (geom.type === 'Polygon') {
+        geom.coordinates[0]?.forEach((coord) => {
+          bounds.extend([coord[0], coord[1]]);
+          hasCoords = true;
+        });
+      } else if (geom.type === 'MultiPolygon') {
+        geom.coordinates.forEach((poly) => {
+          poly[0]?.forEach((coord) => {
+            bounds.extend([coord[0], coord[1]]);
+            hasCoords = true;
+          });
+        });
+      }
+    });
+
+    // 2. Extend with origin point(s)
+    const origin = simulationResult.metadata?.origin;
+    let fallbackCenter: [number, number] | null = null;
+    if (origin) {
+      if (origin.type === 'Point' && Array.isArray(origin.coordinates)) {
+        bounds.extend(origin.coordinates as [number, number]);
+        fallbackCenter = origin.coordinates as [number, number];
+        hasCoords = true;
+      } else if (origin.type === 'MultiPoint' && Array.isArray(origin.coordinates)) {
+        (origin.coordinates as [number, number][]).forEach((pt) => {
+          bounds.extend(pt);
+          hasCoords = true;
+        });
+        if (origin.coordinates.length > 0) {
+          fallbackCenter = origin.coordinates[0] as [number, number];
+        }
+      }
     }
-  }, [simulationResult]);
+
+    if (hasCoords) {
+      // Pad bounds outward slightly so the entire perimeter is beautifully framed
+      const center = bounds.getCenter();
+      const spanLon = Math.max(0.04, Math.abs(bounds.getEast() - bounds.getWest()) * 1.5);
+      const spanLat = Math.max(0.04, Math.abs(bounds.getNorth() - bounds.getSouth()) * 1.5);
+
+      bounds.extend([center.lng - spanLon / 2, center.lat - spanLat / 2]);
+      bounds.extend([center.lng + spanLon / 2, center.lat + spanLat / 2]);
+
+      mapInstance.fitBounds(bounds, {
+        padding: { top: 90, bottom: 90, left: 380, right: 90 },
+        pitch: 52,
+        bearing: bearing,
+        duration: 1800,
+        maxZoom: 13.5,
+      });
+    } else if (fallbackCenter) {
+      mapInstance.flyTo({
+        center: fallbackCenter,
+        zoom: 12.5,
+        pitch: 52,
+        bearing: bearing,
+        duration: 1800,
+      });
+    }
+  }, [simulationResult?.sim_id]);
 
   return (
     <div className="w-full h-full relative" ref={mapRef}>
@@ -163,7 +225,6 @@ export default function FireMap() {
       <WindCompass />
       <IncidentShowcase />
       <TimelineControls />
-      <SimulationResultPanel />
     </div>
   );
 }

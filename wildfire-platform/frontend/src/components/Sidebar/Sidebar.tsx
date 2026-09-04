@@ -7,6 +7,7 @@ import SimulationControls from './SimulationControls';
 import AlertZoneEditor from './AlertZoneEditor';
 import Button from '../UI/Button';
 import { formatPoint } from '@/utils/geo';
+import { findFireComplex } from '@/utils/clustering';
 
 export default function Sidebar() {
   const activeTab = useAppStore(s => s.activeTab);
@@ -24,13 +25,19 @@ export default function Sidebar() {
   const handleQuickSim = async (h: any) => {
     const lat = h.latitude ?? h.lat ?? 0;
     const lon = h.longitude ?? h.lon ?? 0;
-    const origin = { type: 'Point' as const, coordinates: [lon, lat] as [number, number] };
-    
-    const weather = await fetchLiveWeather(lat, lon);
+
+    const complex = findFireComplex(lon, lat, data?.features || [], 12.0);
+    const points = complex.points;
+    const origin = points.length === 1 ? { type: 'Point' as const, coordinates: points[0] } : { type: 'MultiPoint' as const, coordinates: points };
+    const centerLon = complex.center[0];
+    const centerLat = complex.center[1];
+
+    const weather = await fetchLiveWeather(centerLat, centerLon);
     const autoFuel = detectFuelType(weather);
     setDetectedFuelType(autoFuel);
-    
+
     const request = {
+      origins: points,
       origin,
       wind_speed_ms: weather.wind_speed_ms,
       wind_direction_deg: weather.wind_direction_deg,

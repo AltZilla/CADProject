@@ -23,6 +23,11 @@ interface AppState {
   // Hotspots
   selectedHotspot: Hotspot | null;
   setSelectedHotspot: (h: Hotspot | null) => void;
+  isSelectingGroup: boolean;
+  setIsSelectingGroup: (v: boolean) => void;
+  selectedGroupHotspots: [number, number][]; // [lon, lat] pairs
+  toggleGroupHotspot: (point: [number, number]) => void;
+  clearGroupHotspots: () => void;
 
   // Simulation
   simulationRequest: Partial<SimulationRequest>;
@@ -70,6 +75,24 @@ export const useAppStore = create<AppState>((set) => ({
 
   selectedHotspot: null,
   setSelectedHotspot: (h) => set({ selectedHotspot: h }),
+  isSelectingGroup: false,
+  setIsSelectingGroup: (v) => set({ isSelectingGroup: v }),
+  selectedGroupHotspots: [],
+  toggleGroupHotspot: (point) =>
+    set((state) => {
+      const exists = state.selectedGroupHotspots.some(
+        (p) => Math.abs(p[0] - point[0]) < 0.005 && Math.abs(p[1] - point[1]) < 0.005
+      );
+      if (exists) {
+        return {
+          selectedGroupHotspots: state.selectedGroupHotspots.filter(
+            (p) => !(Math.abs(p[0] - point[0]) < 0.005 && Math.abs(p[1] - point[1]) < 0.005)
+          ),
+        };
+      }
+      return { selectedGroupHotspots: [...state.selectedGroupHotspots, point] };
+    }),
+  clearGroupHotspots: () => set({ selectedGroupHotspots: [] }),
 
   simulationRequest: {
     hours: 24,

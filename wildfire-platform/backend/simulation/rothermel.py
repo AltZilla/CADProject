@@ -82,24 +82,28 @@ def compute_ros_8dir(
     u_eff_ms = (phi_eff / 0.25) ** (1.0 / 1.5)
     u_eff_kmh = u_eff_ms * 3.6
     
-    # Alexander Length-to-Width Ratio (L/W >= 1.0)
+    # Alexander Length-to-Width Ratio (L/W >= 1.0, capped at realistic maximum 5.0)
     lw_ratio = 1.0 + 0.125 * u_eff_kmh
-    lw_ratio = np.maximum(lw_ratio, 1.0)
+    lw_ratio = np.clip(lw_ratio, 1.0, 5.0)
     
-    # Ellipse eccentricity (0.0 = circle, -> 0.99 = narrow plume)
-    e = np.sqrt(np.maximum(0.0, 1.0 - (1.0 / (lw_ratio ** 2))))
-    e = np.clip(e, 0.0, 0.985)
+    # Fire spread ellipse distortion parameter epsilon = (L/W - 1) / (L/W + 1)
+    # (Fixes the needle bug where geometric eccentricity was erroneously used)
+    epsilon = (lw_ratio - 1.0) / (lw_ratio + 1.0)
     
     # Maximum forward rate of spread (head fire)
     R_head = R0 * (1.0 + phi_eff)
     
     for i, psi in enumerate(NEIGHBOR_ANGLES):
-        # Ellipse polar equation from rear ignition focus:
-        # R(psi) = R_head * (1 - e) / (1 - e * cos(psi - theta_eff))
+        # Standard Rothermel/Alexander polar equation from ignition point:
+        # R(psi) = R_head * (1 - epsilon) / (1 - epsilon * cos(psi - theta_eff))
         cos_diff = np.cos(psi - theta_eff)
-        denominator = np.maximum(0.01, 1.0 - e * cos_diff)
-        R_dir = R_head * (1.0 - e) / denominator
-        # Enforce minimum spread floor
-        ros_8dir[i] = np.maximum(0.01, R_dir).astype(np.float32)
+        denominator = np.maximum(0.05, 1.0 - epsilon * cos_diff)
+        R_dir = R_head * (1.0 - epsilon) / denominator
+        
+        # Polar Rothermel/Alexander spread formula:
+        # At head (cos=1): R = R_head
+        # At flank (cos=0): R = R_head * (1 - epsilon) = R_head * (2 / (L/W + 1)) >= 0.33 R_head
+        # At back (cos=-1): R = R_head * (1 - epsilon) / (1 + epsilon) = R_head / (L/W) >= 0.20 R_head
+        ros_8dir[i] = np.maximum(0.05, R_dir).astype(np.float32)
         
     return ros_8dir

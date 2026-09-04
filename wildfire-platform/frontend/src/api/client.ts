@@ -6,7 +6,9 @@ const ALERTS_URL = (import.meta.env.VITE_ALERTS_URL || '').replace(/\/+$/, '');
 export async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
   let url = `${BASE_URL}${path}`;
 
-  if (path.startsWith('/hotspots') && HOTSPOTS_URL) {
+  if (BASE_URL) {
+    url = `${BASE_URL.replace(/\/+$/, '')}${path}`;
+  } else if (path.startsWith('/hotspots') && HOTSPOTS_URL) {
     url = `${HOTSPOTS_URL}${path}`;
   } else if (path.startsWith('/simulate-spread') && SIMULATION_URL) {
     url = `${SIMULATION_URL}${path}`;

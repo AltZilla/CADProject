@@ -29,15 +29,35 @@ export default function SimulationControls() {
   const { runSim } = useSimulation();
   const loading = useAppStore(s => s.simulationLoading);
   const error = useAppStore(s => s.simulationError);
+  const playbackHour = useAppStore(s => s.playbackHour);
 
   const [liveWeather, setLiveWeather] = useState<LiveWeather | null>(null);
   const [loadingWeather, setLoadingWeather] = useState(false);
   const [showFuelOverride, setShowFuelOverride] = useState(false);
 
+  const centerCoord = React.useMemo<[number, number] | null>(() => {
+    if (req.origins && req.origins.length > 0) {
+      const lons = req.origins.map(p => p[0]);
+      const lats = req.origins.map(p => p[1]);
+      return [lons.reduce((a, b) => a + b, 0) / lons.length, lats.reduce((a, b) => a + b, 0) / lats.length];
+    }
+    if (!req.origin) return null;
+    if (req.origin.type === 'Point' && Array.isArray(req.origin.coordinates)) {
+      return [req.origin.coordinates[0], req.origin.coordinates[1]];
+    }
+    if (req.origin.type === 'MultiPoint' && Array.isArray(req.origin.coordinates) && req.origin.coordinates.length > 0) {
+      const coords = req.origin.coordinates;
+      const lons = coords.map(p => p[0]);
+      const lats = coords.map(p => p[1]);
+      return [lons.reduce((a, b) => a + b, 0) / lons.length, lats.reduce((a, b) => a + b, 0) / lats.length];
+    }
+    return null;
+  }, [req.origin, req.origins]);
+
   // When origin changes, auto-fetch live weather and detect fuel type
   useEffect(() => {
-    if (!req.origin) return;
-    const [lon, lat] = req.origin.coordinates;
+    if (!centerCoord) return;
+    const [lon, lat] = centerCoord;
     setLoadingWeather(true);
     fetchLiveWeather(lat, lon)
       .then(w => {
@@ -55,17 +75,17 @@ export default function SimulationControls() {
         });
       })
       .catch(() => setLoadingWeather(false));
-  }, [req.origin?.coordinates?.[0], req.origin?.coordinates?.[1]]);
+  }, [centerCoord?.[0], centerCoord?.[1]]);
 
   const handleAutoRun = async () => {
-    if (!req.origin) return;
+    if (!centerCoord) return;
     
     let fuel = detectedFuelType || req.fuel_type || 'SHRUB_CHAPARRAL';
     let resolvedWeather = liveWeather;
     
     // If no weather yet, fetch it
     if (!resolvedWeather) {
-      const [lon, lat] = req.origin.coordinates;
+      const [lon, lat] = centerCoord;
       const w = await fetchLiveWeather(lat, lon);
       resolvedWeather = w;
       setLiveWeather(w);
@@ -75,6 +95,7 @@ export default function SimulationControls() {
     
     runSim({
       origin: req.origin,
+      origins: req.origins,
       wind_speed_ms: resolvedWeather ? resolvedWeather.wind_speed_ms : req.wind_speed_ms ?? 5.0,
       wind_direction_deg: resolvedWeather ? resolvedWeather.wind_direction_deg : req.wind_direction_deg ?? 225.0,
       fuel_type: fuel as FuelType,
@@ -130,6 +151,22 @@ export default function SimulationControls() {
             </div>
           </div>
 
+          {playbackHour !== 6 && playbackHour !== 12 && playbackHour !== 24 && (
+            <div className="bg-slate-900/90 px-2.5 py-1.5 rounded-lg border border-orange-500/40 flex justify-between items-center text-xs">
+              <span className="text-orange-300 font-semibold flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-orange-400 animate-pulse" />
+                Active Playback Hour +{playbackHour}:
+              </span>
+              <span className="text-orange-400 font-bold font-mono">
+                {formatAreaHa(
+                  simulationResult.perimeters.features
+                    .filter(f => (f.properties?.timeframe_hours ?? 0) <= playbackHour)
+                    .reduce((max, f) => Math.max(max, f.properties?.burned_area_ha ?? 0), 0)
+                )}
+              </span>
+            </div>
+          )}
+
           <div className="text-[11px] text-slate-400">
             {formatFuelType(simulationResult.metadata.fuel_type)} · {simulationResult.metadata.weather_source || liveWeather?.source || 'Weather source unavailable'}
           </div>
@@ -146,10 +183,19 @@ export default function SimulationControls() {
         </div>
         <div className="flex items-center justify-between bg-slate-800/90 border border-slate-700/80 p-2.5 rounded-lg">
           <div className="text-xs font-mono text-slate-300">
-            {req.origin 
-              ? formatPoint(req.origin.coordinates as [number, number])
-              : <span className="text-slate-500 font-sans">Right-click map or click any hotspot</span>
-            }
+            {req.origins && req.origins.length > 1 ? (
+              <span className="text-amber-400 font-semibold">
+                Cluster of {req.origins.length} hotspots ({centerCoord ? formatPoint(centerCoord) : ''})
+              </span>
+            ) : req.origin && req.origin.type === 'Point' ? (
+              formatPoint(req.origin.coordinates as [number, number])
+            ) : req.origin && req.origin.type === 'MultiPoint' ? (
+              <span className="text-amber-400 font-semibold">
+                Multi-Point ({(req.origin.coordinates as [number, number][]).length} pts)
+              </span>
+            ) : (
+              <span className="text-slate-500 font-sans">Click map, right-click, or select hotspots</span>
+            )}
           </div>
           <Button 
             size="sm" 
@@ -274,10 +320,13 @@ export default function SimulationControls() {
       <Button 
         className="w-full py-2.5 bg-gradient-to-r from-orange-500 via-red-500 to-red-600 hover:from-orange-600 hover:to-red-700 text-white font-semibold shadow-lg shadow-orange-500/25" 
         onClick={handleAutoRun}
-        disabled={!req.origin}
+        disabled={!req.origin && (!req.origins || req.origins.length === 0)}
         loading={loading}
       >
-        <Zap size={16} className="mr-2 fill-current" /> Run Fire Spread Forecast
+        <Zap size={16} className="mr-2 fill-current" />
+        {req.origins && req.origins.length > 1
+          ? `Run Forecast for ${req.origins.length} Hotspots`
+          : 'Run Fire Spread Forecast'}
       </Button>
 
       {error && <div className="p-2.5 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400 text-xs">{error}</div>}

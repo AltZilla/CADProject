@@ -37,6 +37,8 @@ export default function SimulationLayer() {
         data: { type: 'FeatureCollection', features: [] },
       });
 
+      const beforeId = map.getLayer('hotspots-circle') ? 'hotspots-circle' : undefined;
+
       // Burned interior — all hours behind the leading edge
       map.addLayer({
         id: 'sim-fill-burned',
@@ -52,18 +54,18 @@ export default function SimulationLayer() {
             24, 'rgba(253,224,71,0.20)',      // faded yellow — recent
           ],
         }
-      });
+      }, beforeId);
 
       // Leading edge glow — only the current hour perimeter
       map.addLayer({
         id: 'sim-fill-leading',
         type: 'fill',
         source: sourceId,
-        filter: ['==', ['get', 'timeframe_hours'], 24],
+        filter: ['==', ['get', 'timeframe_hours'], 1],
         paint: {
           'fill-color': 'rgba(251,146,60,0.45)',
         }
-      });
+      }, beforeId);
 
       // Outline for all visible perimeters
       map.addLayer({
@@ -79,31 +81,27 @@ export default function SimulationLayer() {
             18, '#fbbf24',
             24, '#fef08a',
           ],
-          'line-width': [
-            'case',
-            ['==', ['get', 'timeframe_hours'], 24], 3,
-            1.2
-          ],
+          'line-width': 1.2,
           'line-opacity': [
             'interpolate', ['linear'], ['get', 'timeframe_hours'],
             1, 0.3,
             24, 0.9,
           ],
         }
-      });
+      }, beforeId);
 
       // Bright leading edge outline
       map.addLayer({
         id: 'sim-outline-leading',
         type: 'line',
         source: sourceId,
-        filter: ['==', ['get', 'timeframe_hours'], 24],
+        filter: ['==', ['get', 'timeframe_hours'], 1],
         paint: {
           'line-color': '#fb923c',
           'line-width': 3,
           'line-dasharray': [4, 4],
         }
-      });
+      }, beforeId);
     }
 
     if (visibleData.features.length > 0) {
@@ -114,32 +112,6 @@ export default function SimulationLayer() {
       }
 
       (map.getSource(sourceId) as maplibregl.GeoJSONSource).setData(visibleData);
-      
-      // Fit bounds on first render (full result, not just visible)
-      if (simulationResult?.perimeters) {
-        const bounds = new maplibregl.LngLatBounds();
-        let hasCoords = false;
-        simulationResult.perimeters.features.forEach(f => {
-          const geom = f.geometry;
-          if (geom.type === 'Polygon') {
-            geom.coordinates[0].forEach(coord => {
-              bounds.extend([coord[0], coord[1]]);
-              hasCoords = true;
-            });
-          } else if (geom.type === 'MultiPolygon') {
-            geom.coordinates.forEach(poly => {
-              poly[0].forEach(coord => {
-                bounds.extend([coord[0], coord[1]]);
-                hasCoords = true;
-              });
-            });
-          }
-        });
-        // Only fit bounds when playback is at max (avoid constant re-fitting during playback)
-        if (hasCoords && playbackHour >= 24) {
-          map.fitBounds(bounds, { padding: 80, maxZoom: 14 });
-        }
-      }
 
       // Animate leading edge dash
       let step = 0;

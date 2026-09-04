@@ -4,19 +4,30 @@ import { Wind } from 'lucide-react';
 
 export default function WindCompass() {
   const simulationResult = useAppStore(s => s.simulationResult);
+  const playbackHour = useAppStore(s => s.playbackHour);
 
   if (!simulationResult?.metadata) return null;
 
-  const windDir = simulationResult.metadata.wind_direction_deg ?? 0;
-  const windSpeed = simulationResult.metadata.wind_speed_ms;
-  const windKmh = Math.round(windSpeed * 3.6);
+  const hourlyList = simulationResult.metadata.hourly_weather;
+  const hourly = (hourlyList && hourlyList.length >= playbackHour) ? hourlyList[playbackHour - 1] : null;
 
-  // Wind direction is where wind comes FROM. Arrow points in travel direction (FROM + 180).
-  const arrowRotation = windDir;
+  const windDir = hourly ? hourly.wind_direction_deg : (simulationResult.metadata.wind_direction_deg ?? 0);
+  const windSpeed = hourly ? hourly.wind_speed_ms : simulationResult.metadata.wind_speed_ms;
+  const windKmh = Math.round(windSpeed * 3.6);
+  const tempC = hourly ? hourly.temperature_c : simulationResult.metadata.temperature_c;
+  const rh = hourly ? hourly.relative_humidity : simulationResult.metadata.relative_humidity;
+
+  // Arrow points in travel direction (where wind blows toward)
+  const arrowRotation = (windDir + 180) % 360;
 
   return (
     <div className="absolute top-20 right-4 z-30">
-      <div className="bg-slate-900/90 backdrop-blur-sm border border-slate-700/80 rounded-2xl p-3 shadow-lg w-[88px]">
+      <div className="bg-slate-900/90 backdrop-blur-sm border border-slate-700/80 rounded-2xl p-3 shadow-lg w-[104px]">
+        {/* Hour badge */}
+        <div className="text-[10px] text-center font-bold text-orange-400 mb-1">
+          Hour +{playbackHour} Wind
+        </div>
+
         {/* Compass ring */}
         <div className="relative w-16 h-16 mx-auto mb-2">
           {/* Outer ring */}
@@ -54,12 +65,12 @@ export default function WindCompass() {
           <span className="absolute left-0 top-1/2 -translate-y-1/2 -translate-x-0.5 text-[8px] font-bold text-slate-500">W</span>
           <span className="absolute right-0 top-1/2 -translate-y-1/2 translate-x-0.5 text-[8px] font-bold text-slate-500">E</span>
 
-          {/* Wind arrow */}
+          {/* Dynamic wind direction arrow */}
           <div
-            className="absolute inset-0 flex items-center justify-center transition-transform duration-500"
+            className="absolute inset-0 flex items-center justify-center transition-transform duration-500 ease-out"
             style={{ transform: `rotate(${arrowRotation}deg)` }}
           >
-            <svg viewBox="0 0 24 40" className="w-5 h-8" style={{ filter: 'drop-shadow(0 0 4px rgba(251,146,60,0.6))' }}>
+            <svg viewBox="0 0 24 40" className="w-5 h-8" style={{ filter: 'drop-shadow(0 0 5px rgba(251,146,60,0.8))' }}>
               {/* Arrow body */}
               <line x1="12" y1="36" x2="12" y2="6" stroke="#fb923c" strokeWidth="2.5" strokeLinecap="round" />
               {/* Arrow head */}
@@ -70,15 +81,20 @@ export default function WindCompass() {
           </div>
         </div>
 
-        {/* Wind info */}
+        {/* Real meteorological data for this exact hour */}
         <div className="text-center space-y-0.5">
           <div className="flex items-center justify-center gap-1">
-            <Wind size={10} className="text-cyan-400" />
+            <Wind size={11} className="text-cyan-400" />
             <span className="text-xs font-bold text-cyan-300">{windKmh} <span className="text-[9px] text-slate-400">km/h</span></span>
           </div>
-          <div className="text-[9px] text-slate-500">
+          <div className="text-[9px] text-slate-400 font-mono">
             FROM {Math.round(windDir)}°
           </div>
+          {tempC !== undefined && (
+            <div className="text-[9px] text-slate-500 pt-0.5 border-t border-slate-800">
+              {tempC}°C · {rh}% RH
+            </div>
+          )}
         </div>
       </div>
     </div>

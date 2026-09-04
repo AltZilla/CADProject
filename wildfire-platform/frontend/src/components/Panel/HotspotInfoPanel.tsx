@@ -9,11 +9,16 @@ import Button from '../UI/Button';
 import Badge from '../UI/Badge';
 import { formatPoint } from '@/utils/geo';
 
+import { useHotspots } from '@/hooks/useHotspots';
+import { findFireComplex } from '@/utils/clustering';
+
 export default function HotspotInfoPanel() {
   const map = useMap();
   const hotspot = useAppStore(s => s.selectedHotspot);
   const setSelectedHotspot = useAppStore(s => s.setSelectedHotspot);
   const setSimulationRequest = useAppStore(s => s.setSimulationRequest);
+  const setActiveTab = useAppStore(s => s.setActiveTab);
+  const { data } = useHotspots();
   const { runSim } = useSimulation();
   const loading = useAppStore(s => s.simulationLoading);
 
@@ -22,6 +27,11 @@ export default function HotspotInfoPanel() {
   
   const popupRef = useRef<maplibregl.Popup | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+
+  const complex = React.useMemo(() => {
+    if (!hotspot) return null;
+    return findFireComplex(hotspot.longitude, hotspot.latitude, data?.features || [], 12.0);
+  }, [hotspot, data]);
 
   // Auto-fetch live Open-Meteo weather whenever a hotspot is selected
   useEffect(() => {
@@ -73,14 +83,18 @@ export default function HotspotInfoPanel() {
 
   const handleAutoSimulate = () => {
     const fuelType = weather ? detectFuelType(weather) : 'SHRUB_CHAPARRAL';
+    const points = complex?.points && complex.points.length > 0 ? complex.points : [[hotspot.longitude, hotspot.latitude] as [number, number]];
     const req = {
-      origin: { type: 'Point' as const, coordinates: [hotspot.longitude, hotspot.latitude] as [number, number] },
+      origins: points,
+      origin: points.length === 1 ? { type: 'Point' as const, coordinates: points[0] } : { type: 'MultiPoint' as const, coordinates: points },
       wind_speed_ms: weather ? weather.wind_speed_ms : 5.0,
       wind_direction_deg: weather ? weather.wind_direction_deg : 225.0,
       fuel_type: fuelType,
       hours: 24 as const
     };
+    setSelectedHotspot(null);
     setSimulationRequest(req);
+    setActiveTab('simulation');
     runSim(req);
   };
 
@@ -164,11 +178,12 @@ export default function HotspotInfoPanel() {
         {/* 1-Click Auto Simulation Button */}
         <Button 
           size="sm" 
-          className="w-full bg-gradient-to-r from-orange-500 to-red-600 hover:from-orange-600 hover:to-red-700 text-white font-medium py-2 shadow-lg shadow-orange-500/20" 
+          className="w-full bg-gradient-to-r from-orange-500 to-red-600 hover:from-orange-600 hover:to-red-700 text-white font-medium py-2 shadow-lg shadow-orange-500/20 text-xs" 
           onClick={handleAutoSimulate}
           loading={loading}
         >
-          <Zap size={14} className="mr-1.5 fill-current" /> Auto-Simulate Spread Forecast
+          <Zap size={14} className="mr-1.5 fill-current" />
+          {complex && complex.count > 1 ? `Simulate Entire Complex (${complex.count} pts)` : 'Auto-Simulate Spread Forecast'}
         </Button>
       </div>
     </div>
