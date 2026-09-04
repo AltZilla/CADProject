@@ -109,21 +109,42 @@ export default function HotspotLayer() {
         source: sourceId,
         maxzoom: 11,
         paint: {
-          'heatmap-weight': ['interpolate', ['linear'], ['get', 'frp'], 0, 0.1, 50, 0.6, 200, 1.0],
-          'heatmap-intensity': ['interpolate', ['linear'], ['zoom'], 0, 1, 9, 3],
+          'heatmap-weight': [
+            'interpolate', ['exponential', 1.3], ['get', 'frp'],
+            0, 0.12,
+            30, 0.40,
+            100, 0.75,
+            300, 1.0
+          ],
+          'heatmap-intensity': [
+            'interpolate', ['linear'], ['zoom'],
+            0, 0.55,
+            3, 0.90,
+            6, 1.4,
+            9, 2.4
+          ],
           'heatmap-color': [
             'interpolate', ['linear'], ['heatmap-density'],
-            0, 'rgba(0,0,0,0)',
-            0.2, 'rgba(251,146,60,0.6)',
-            0.6, 'rgba(239,68,68,0.85)',
-            1, 'rgba(185,28,28,1)'
+            0.00, 'rgba(0, 0, 0, 0)',
+            0.10, 'rgba(251, 191, 36, 0.40)',  // Vivid amber-gold
+            0.30, 'rgba(249, 115, 22, 0.68)',  // Fiery flame orange
+            0.55, 'rgba(239, 68, 68, 0.82)',   // Wildfire scarlet
+            0.80, 'rgba(220, 38, 38, 0.90)',   // Deep crimson
+            1.00, 'rgba(254, 240, 138, 0.98)'  // White-hot incandescent thermal core
           ],
-          'heatmap-radius': ['interpolate', ['linear'], ['zoom'], 0, 8, 9, 25],
+          'heatmap-radius': [
+            'interpolate', ['linear'], ['zoom'],
+            0, 5.0,
+            3, 8.5,
+            6, 15.0,
+            9, 24.0
+          ],
           'heatmap-opacity': [
             'interpolate', ['linear'], ['zoom'],
-            4, 0.9,
-            7, 0.8,
-            9, 0.45,
+            0, 0.78,
+            3, 0.80,
+            6, 0.70,
+            8.5, 0.45,
             10.5, 0.0
           ],
         }
@@ -149,16 +170,16 @@ export default function HotspotLayer() {
           'circle-color': [
             'case',
             ['==', ['get', 'is_burned'], true],
-            'rgba(234, 88, 12, 0.35)',
+            'rgba(234, 88, 12, 0.25)',
             [
               'interpolate', ['linear'], ['get', 'frp'],
-              0, 'rgba(249, 115, 22, 0.35)',
-              30, 'rgba(239, 68, 68, 0.50)',
-              100, 'rgba(220, 38, 38, 0.65)'
+              0, 'rgba(249, 115, 22, 0.20)',
+              30, 'rgba(239, 68, 68, 0.35)',
+              100, 'rgba(220, 38, 38, 0.45)'
             ]
           ],
-          'circle-blur': 0.75,
-          'circle-opacity': 0.85,
+          'circle-blur': 0.8,
+          'circle-opacity': 0.75,
         }
       });
 
