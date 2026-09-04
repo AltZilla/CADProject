@@ -40,10 +40,15 @@ export default function HotspotLayer() {
   
   const sourceId = 'hotspots-source';
   const heatmapLayerId = 'hotspots-heatmap';
+  const glowLayerId = 'hotspots-glow';
   const circleLayerId = 'hotspots-circle';
+  const innerLayerId = 'hotspots-inner';
   const selectedSourceId = 'hotspots-selected-source';
   const selectedHaloId = 'hotspots-selected-halo';
   const selectedCoreId = 'hotspots-selected-core';
+  const originSourceId = 'sim-origin-source';
+  const originHaloId = 'sim-origin-halo';
+  const originCoreId = 'sim-origin-core';
   const clusterPopupRef = useRef<maplibregl.Popup | null>(null);
 
   // Active perimeters at the current playback hour
@@ -93,72 +98,131 @@ export default function HotspotLayer() {
       map.addSource(sourceId, {
         type: 'geojson',
         data: { type: 'FeatureCollection', features: [] },
+        tolerance: 0,
+        buffer: 128,
       });
 
-      // Heatmap density layer
+      // 1. Heatmap density layer with smooth crossfade between zoom 4 and 10.5
       map.addLayer({
         id: heatmapLayerId,
         type: 'heatmap',
         source: sourceId,
-        maxzoom: 9,
+        maxzoom: 11,
         paint: {
-          'heatmap-weight': ['interpolate', ['linear'], ['get', 'frp'], 0, 0, 100, 1],
+          'heatmap-weight': ['interpolate', ['linear'], ['get', 'frp'], 0, 0.1, 50, 0.6, 200, 1.0],
           'heatmap-intensity': ['interpolate', ['linear'], ['zoom'], 0, 1, 9, 3],
           'heatmap-color': [
             'interpolate', ['linear'], ['heatmap-density'],
             0, 'rgba(0,0,0,0)',
-            0.2, 'rgba(254,240,138,0.6)',
-            0.6, 'rgba(251,146,60,0.8)',
-            1, 'rgba(239,68,68,1)'
+            0.2, 'rgba(251,146,60,0.6)',
+            0.6, 'rgba(239,68,68,0.85)',
+            1, 'rgba(185,28,28,1)'
           ],
           'heatmap-radius': ['interpolate', ['linear'], ['zoom'], 0, 8, 9, 25],
-          'heatmap-opacity': ['interpolate', ['linear'], ['zoom'], 6, 0.85, 9, 0.3],
+          'heatmap-opacity': [
+            'interpolate', ['linear'], ['zoom'],
+            4, 0.9,
+            7, 0.8,
+            9, 0.45,
+            10.5, 0.0
+          ],
         }
       });
 
-      // Individual hotspot circles with dynamic active-to-ash transition
+      // 2. Soft glowing heat halo underneath individual hotspots (visible even in 3D terrain)
       map.addLayer({
-        id: circleLayerId,
+        id: glowLayerId,
         type: 'circle',
         source: sourceId,
-        minzoom: 5,
+        minzoom: 4,
         paint: {
+          'circle-pitch-alignment': 'map',
+          'circle-pitch-scale': 'viewport',
           'circle-radius': [
-            'case',
-            ['==', ['get', 'is_burned'], true],
-            ['interpolate', ['linear'], ['zoom'], 5, 2, 8, 3.5, 12, 7], // smaller when ash
-            ['interpolate', ['linear'], ['zoom'], 5, 2.5, 8, 5.5, 12, 10]
+            'interpolate', ['linear'], ['zoom'],
+            4, 5,
+            7, 9,
+            10, 14,
+            13, 20,
+            16, 28
           ],
           'circle-color': [
             'case',
             ['==', ['get', 'is_burned'], true],
-            '#475569', // Quenched charcoal/ash
+            'rgba(234, 88, 12, 0.35)',
             [
               'interpolate', ['linear'], ['get', 'frp'],
-              0, '#fef08a',
-              20, '#f97316',
-              100, '#ef4444'
+              0, 'rgba(249, 115, 22, 0.35)',
+              30, 'rgba(239, 68, 68, 0.50)',
+              100, 'rgba(220, 38, 38, 0.65)'
             ]
           ],
-          'circle-opacity': [
+          'circle-blur': 0.75,
+          'circle-opacity': 0.85,
+        }
+      });
+
+      // 3. Primary high-contrast hotspot dot — anchored to 3D terrain with razor-sharp dark outline
+      map.addLayer({
+        id: circleLayerId,
+        type: 'circle',
+        source: sourceId,
+        minzoom: 4,
+        paint: {
+          'circle-pitch-alignment': 'map',
+          'circle-pitch-scale': 'viewport',
+          'circle-radius': [
             'case',
             ['==', ['get', 'is_burned'], true],
-            0.45,
-            ['interpolate', ['linear'], ['zoom'], 5, 0.65, 8, 0.95]
+            ['interpolate', ['linear'], ['zoom'], 4, 3.0, 7, 5.0, 10, 8.0, 13, 11.5, 16, 16],
+            ['interpolate', ['linear'], ['zoom'], 4, 3.5, 7, 5.5, 10, 8.5, 13, 12.0, 16, 17]
           ],
+          'circle-color': [
+            'case',
+            ['==', ['get', 'is_burned'], true],
+            '#ea580c', // Bright glowing ember core (never invisible grey!)
+            [
+              'interpolate', ['linear'], ['get', 'frp'],
+              0, '#f97316',      // Crisp visible amber-orange (never pale washed-out yellow)
+              15, '#ea580c',
+              50, '#ef4444',     // Crimson
+              150, '#b91c1c'     // Intense fire red
+            ]
+          ],
+          'circle-opacity': 0.95,
           'circle-stroke-color': [
             'case',
             ['==', ['get', 'is_burned'], true],
-            '#334155',
-            '#ffffff'
+            '#ffffff', // White ignition rim
+            '#0f172a'  // Dark slate border for supreme contrast on light basemaps & satellite
           ],
           'circle-stroke-width': [
-            'case',
-            ['==', ['get', 'is_burned'], true],
-            0.8,
-            1.5
+            'interpolate', ['linear'], ['zoom'],
+            4, 1.0,
+            8, 1.8,
+            13, 2.4
           ],
-          'circle-stroke-opacity': 0.8,
+          'circle-stroke-opacity': 0.95,
+        }
+      });
+
+      // 4. White-hot inner thermal core for authentic satellite VIIRS signature
+      map.addLayer({
+        id: innerLayerId,
+        type: 'circle',
+        source: sourceId,
+        minzoom: 6,
+        paint: {
+          'circle-pitch-alignment': 'map',
+          'circle-pitch-scale': 'viewport',
+          'circle-radius': [
+            'interpolate', ['linear'], ['zoom'],
+            6, 1.5,
+            10, 3.0,
+            14, 4.5
+          ],
+          'circle-color': '#ffffff',
+          'circle-opacity': 0.92,
         }
       });
 
@@ -216,6 +280,9 @@ export default function HotspotLayer() {
 
         setTimeout(() => {
           const runSimulationWithPoints = async (points: [number, number][]) => {
+            clusterPopupRef.current?.remove();
+            useAppStore.getState().setSelectedGroupHotspots(points);
+
             const centerLon = points.reduce((a, b) => a + b[0], 0) / points.length;
             const centerLat = points.reduce((a, b) => a + b[1], 0) / points.length;
 
@@ -269,6 +336,8 @@ export default function HotspotLayer() {
           type: 'circle',
           source: selectedSourceId,
           paint: {
+            'circle-pitch-alignment': 'map',
+            'circle-pitch-scale': 'viewport',
             'circle-radius': [
               'interpolate', ['linear'], ['zoom'],
               5, 7,
@@ -287,10 +356,62 @@ export default function HotspotLayer() {
           type: 'circle',
           source: selectedSourceId,
           paint: {
-            'circle-radius': 4,
+            'circle-pitch-alignment': 'map',
+            'circle-pitch-scale': 'viewport',
+            'circle-radius': 4.5,
             'circle-color': '#fbbf24',
             'circle-stroke-color': '#ffffff',
-            'circle-stroke-width': 1.5,
+            'circle-stroke-width': 2,
+          },
+        });
+      }
+
+      // Dedicated Simulation Ignition Origin Beacon
+      if (!map.getSource(originSourceId)) {
+        map.addSource(originSourceId, {
+          type: 'geojson',
+          data: { type: 'FeatureCollection', features: [] },
+        });
+
+        map.addLayer({
+          id: originHaloId,
+          type: 'circle',
+          source: originSourceId,
+          paint: {
+            'circle-pitch-alignment': 'map',
+            'circle-pitch-scale': 'viewport',
+            'circle-radius': [
+              'interpolate', ['linear'], ['zoom'],
+              4, 10,
+              8, 16,
+              12, 24,
+              16, 32
+            ],
+            'circle-color': 'rgba(239, 68, 68, 0.35)',
+            'circle-stroke-color': '#ef4444',
+            'circle-stroke-width': 2.5,
+            'circle-stroke-opacity': 0.95,
+          },
+        });
+
+        map.addLayer({
+          id: originCoreId,
+          type: 'circle',
+          source: originSourceId,
+          paint: {
+            'circle-pitch-alignment': 'map',
+            'circle-pitch-scale': 'viewport',
+            'circle-radius': [
+              'interpolate', ['linear'], ['zoom'],
+              4, 5,
+              8, 7,
+              12, 10,
+              16, 14
+            ],
+            'circle-color': '#dc2626',
+            'circle-stroke-color': '#ffffff',
+            'circle-stroke-width': 2.5,
+            'circle-opacity': 1.0,
           },
         });
       }
@@ -343,7 +464,42 @@ export default function HotspotLayer() {
     if (map && map.getSource(sourceId)) {
       (map.getSource(sourceId) as maplibregl.GeoJSONSource).setData(enrichedData);
     }
+    // Keep hotspot and ignition markers elevated above 3D terrain fills
+    const topLayers = [glowLayerId, circleLayerId, innerLayerId, originHaloId, originCoreId, selectedHaloId, selectedCoreId];
+    topLayers.forEach((id) => {
+      if (map && map.getLayer(id)) {
+        try {
+          map.moveLayer(id);
+        } catch (_) {}
+      }
+    });
   }, [map, enrichedData]);
+
+  // Push Simulation Origin GeoJSON to MapLibre
+  useEffect(() => {
+    if (!map || !map.getSource(originSourceId)) return;
+    const origin = simulationResult?.metadata?.origin;
+    const origins = (simulationResult?.metadata as any)?.origins;
+    const pts: [number, number][] = [];
+    if (origins && Array.isArray(origins)) {
+      origins.forEach((p: any) => pts.push(p as [number, number]));
+    } else if (origin) {
+      if (origin.type === 'Point' && Array.isArray(origin.coordinates)) {
+        pts.push(origin.coordinates as [number, number]);
+      } else if (origin.type === 'MultiPoint' && Array.isArray(origin.coordinates)) {
+        (origin.coordinates as [number, number][]).forEach((p: any) => pts.push(p));
+      }
+    }
+    const features = pts.map((p) => ({
+      type: 'Feature' as const,
+      geometry: { type: 'Point' as const, coordinates: p },
+      properties: { is_origin: true },
+    }));
+    (map.getSource(originSourceId) as maplibregl.GeoJSONSource).setData({
+      type: 'FeatureCollection',
+      features,
+    });
+  }, [map, simulationResult]);
 
   // Push selected hotspots GeoJSON to MapLibre
   useEffect(() => {

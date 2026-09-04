@@ -143,11 +143,12 @@ class WildfireDevHandler(BaseHTTPRequestHandler):
             raw_max_lon = float(query.get('max_lon', [180])[0])
             raw_max_lat = float(query.get('max_lat', [90])[0])
 
-            # Normalize so min is always <= max regardless of camera rotation or pitch
-            min_lon = max(-180.0, min(raw_min_lon, raw_max_lon))
-            max_lon = min(180.0, max(raw_min_lon, raw_max_lon))
-            min_lat = max(-89.0, min(raw_min_lat, raw_max_lat))
-            max_lat = min(89.0, max(raw_min_lat, raw_max_lat))
+            # Add small buffer so boundary hotspots never flicker or clip
+            buf = 0.1
+            min_lon = max(-180.0, min(raw_min_lon, raw_max_lon) - buf)
+            max_lon = min(180.0, max(raw_min_lon, raw_max_lon) + buf)
+            min_lat = max(-89.0, min(raw_min_lat, raw_max_lat) - buf)
+            max_lat = min(89.0, max(raw_min_lat, raw_max_lat) + buf)
             
             print(f"[Hotspots Query] min_lon={min_lon:.2f}, min_lat={min_lat:.2f}, max_lon={max_lon:.2f}, max_lat={max_lat:.2f} | Total loaded: {len(HOTSPOT_LATS)}", flush=True)
             if len(HOTSPOT_LATS) > 0:
@@ -158,8 +159,8 @@ class WildfireDevHandler(BaseHTTPRequestHandler):
                 )
                 indices = np.where(in_bbox)[0]
                 
-                # Limit density when zoomed out for smooth rendering
-                max_return = 1000
+                # Limit density when zoomed out for smooth rendering, but allow high density (up to 5000)
+                max_return = 5000
                 if len(indices) > max_return:
                     # Select the highest FRP hotspots in current view
                     sub_frps = HOTSPOT_FRPS[indices]
@@ -323,6 +324,8 @@ class WildfireDevHandler(BaseHTTPRequestHandler):
                         ignition_cells.append((r, c))
                 if not ignition_cells:
                     ignition_cells = [(engine.NY // 2, engine.NX // 2)]
+
+                print(f"[Simulate] {len(points)} origin points -> {len(ignition_cells)} grid cells, center=({center_lat:.4f}, {center_lon:.4f}), fuel={fuel_type}", flush=True)
 
                 # 5. Continuous Dijkstra arrival-time multi-point solver
                 start_time = time.time()

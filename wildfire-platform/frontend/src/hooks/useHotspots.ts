@@ -4,6 +4,10 @@ import { useAppStore } from '@/store/appStore';
 import { useRef, useMemo } from 'react';
 import type { HotspotFeatureCollection } from '../types/hotspot';
 
+// Global in-memory cache across all components and viewport queries
+// Hotspots once loaded are permanently retained so zooming/panning NEVER causes dots to disappear!
+const globalHotspotCache = new Map<string, any>();
+
 export function useHotspots() {
   const mapBbox = useAppStore(s => s.mapBbox);
 
@@ -32,18 +36,14 @@ export function useHotspots() {
     refetchOnWindowFocus: false,
   });
 
-  // Cumulative in-memory feature cache:
-  // As new areas are queried, merge them into allKnownFeatures so dots NEVER disappear when panning back and forth!
-  const cacheRef = useRef<Map<string, any>>(new Map());
-
   const mergedData: HotspotFeatureCollection = useMemo(() => {
     if (query.data?.features) {
       query.data.features.forEach((f: any) => {
         const id = f.properties?.hotspot_id || `${f.geometry?.coordinates?.[0]},${f.geometry?.coordinates?.[1]}`;
-        cacheRef.current.set(id, f);
+        globalHotspotCache.set(id, f);
       });
     }
-    const allFeatures = Array.from(cacheRef.current.values());
+    const allFeatures = Array.from(globalHotspotCache.values());
     return {
       type: 'FeatureCollection' as const,
       features: allFeatures.length > 0 ? allFeatures : (query.data?.features || [])

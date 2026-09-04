@@ -9,6 +9,7 @@ import AlertZoneLayer from './AlertZoneLayer';
 import HotspotPopup from '../Panel/HotspotInfoPanel';
 import MapContextMenu from './MapContextMenu';
 import MapToolbar from './MapToolbar';
+import AreaSelectOverlay from './AreaSelectOverlay';
 import TimelineControls from '../Simulation/TimelineControls';
 import IncidentShowcase from '../Simulation/IncidentShowcase';
 import WindCompass from './WindCompass';
@@ -71,10 +72,23 @@ export default function FireMap() {
     let timeout: number;
     const updateBbox = () => {
       const bounds = map.getBounds();
-      const west = bounds.getWest();
-      const south = bounds.getSouth();
-      const east = bounds.getEast();
-      const north = bounds.getNorth();
+      const center = map.getCenter();
+      const zoom = map.getZoom();
+
+      let west = bounds.getWest();
+      let south = bounds.getSouth();
+      let east = bounds.getEast();
+      let north = bounds.getNorth();
+
+      // If camera is pitched or zoomed in, prevent distant horizon from inflating bounding box to continental size
+      if (zoom >= 6) {
+        const maxSpanDeg = Math.min(25, 360 / Math.pow(1.85, zoom - 1));
+        west = Math.max(west, center.lng - maxSpanDeg);
+        east = Math.min(east, center.lng + maxSpanDeg);
+        south = Math.max(south, center.lat - maxSpanDeg);
+        north = Math.min(north, center.lat + maxSpanDeg);
+      }
+
       const min_lon = Math.min(west, east);
       const max_lon = Math.max(west, east);
       const min_lat = Math.max(-85, Math.min(south, north));
@@ -84,7 +98,7 @@ export default function FireMap() {
 
     const handleMove = () => {
       clearTimeout(timeout);
-      timeout = window.setTimeout(updateBbox, 800);
+      timeout = window.setTimeout(updateBbox, 600);
     };
 
     map.on('moveend', handleMove);
@@ -92,7 +106,11 @@ export default function FireMap() {
 
     map.on('click', (e) => {
       if (useAppStore.getState().isPickingOrigin) {
-        setSimulationRequest({ origin: { type: 'Point', coordinates: [e.lngLat.lng, e.lngLat.lat] } });
+        useAppStore.getState().clearGroupHotspots();
+        setSimulationRequest({
+          origins: undefined,
+          origin: { type: 'Point', coordinates: [e.lngLat.lng, e.lngLat.lat] },
+        });
         setIsPickingOrigin(false);
       } else if (useAppStore.getState().isDrawingZone) {
         addDrawnZonePoint([e.lngLat.lng, e.lngLat.lat]);
@@ -125,8 +143,8 @@ export default function FireMap() {
       mapInstance.easeTo({ pitch: 0, bearing: 0, duration: 800 });
       setIs3D(false);
     } else {
-      mapInstance.setTerrain({ source: 'terrain-dem', exaggeration: 1.5 });
-      mapInstance.easeTo({ pitch: 55, duration: 800 });
+      mapInstance.setTerrain({ source: 'terrain-dem', exaggeration: 1.15 });
+      mapInstance.easeTo({ pitch: 52, duration: 800 });
       setIs3D(true);
     }
   };
@@ -135,8 +153,8 @@ export default function FireMap() {
   useEffect(() => {
     if (!mapInstance || !simulationResult) return;
 
-    // Enable 3D terrain elevation
-    mapInstance.setTerrain({ source: 'terrain-dem', exaggeration: 1.5 });
+    // Enable 3D terrain elevation with realistic scale
+    mapInstance.setTerrain({ source: 'terrain-dem', exaggeration: 1.15 });
     setIs3D(true);
 
     const windDir = simulationResult.metadata?.wind_direction_deg ?? 0;
@@ -218,6 +236,7 @@ export default function FireMap() {
           <SimulationLayer />
           <AlertZoneLayer />
           {selectedHotspot && <HotspotPopup />}
+          <AreaSelectOverlay />
         </MapContext.Provider>
       )}
       <MapContextMenu />

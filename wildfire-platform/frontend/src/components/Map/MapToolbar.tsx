@@ -1,7 +1,7 @@
 import React from 'react';
 import { useAppStore } from '@/store/appStore';
 import { useHotspots } from '@/hooks/useHotspots';
-import { Flame, RefreshCw, Crosshair, Mountain, CheckSquare } from 'lucide-react';
+import { Flame, RefreshCw, Crosshair, Mountain, CheckSquare, SquareDashed } from 'lucide-react';
 
 interface MapToolbarProps {
   is3D?: boolean;
@@ -13,6 +13,8 @@ export default function MapToolbar({ is3D, onToggle3D }: MapToolbarProps) {
   const setIsPickingOrigin = useAppStore(s => s.setIsPickingOrigin);
   const isSelectingGroup = useAppStore(s => s.isSelectingGroup);
   const setIsSelectingGroup = useAppStore(s => s.setIsSelectingGroup);
+  const isDrawingArea = useAppStore(s => s.isDrawingArea);
+  const setIsDrawingArea = useAppStore(s => s.setIsDrawingArea);
   const selectedGroupHotspots = useAppStore(s => s.selectedGroupHotspots);
   const { data, refetch, isFetching } = useHotspots();
   
@@ -36,11 +38,29 @@ export default function MapToolbar({ is3D, onToggle3D }: MapToolbarProps) {
         <RefreshCw size={14} className={isFetching ? 'animate-spin' : ''} />
       </button>
 
+      {/* Area Selection Tool — draw rectangle to select all hotspots in area */}
+      <button
+        onClick={() => {
+          setIsDrawingArea(!isDrawingArea);
+          if (isSelectingGroup) setIsSelectingGroup(false);
+          if (isPickingOrigin) setIsPickingOrigin(false);
+        }}
+        className={`p-1.5 rounded-full transition-colors flex items-center gap-1 ${
+          isDrawingArea
+            ? 'text-cyan-400 bg-cyan-500/25 ring-1 ring-cyan-500/50'
+            : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+        }`}
+        title={isDrawingArea ? 'Cancel area select' : 'Draw rectangle to select area of hotspots'}
+      >
+        <SquareDashed size={14} />
+      </button>
+
       {/* Manual Multi-Select Hotspots Tool */}
       <button
         onClick={() => {
           setIsSelectingGroup(!isSelectingGroup);
           if (isPickingOrigin) setIsPickingOrigin(false);
+          if (isDrawingArea) setIsDrawingArea(false);
         }}
         className={`p-1.5 rounded-full transition-colors flex items-center gap-1 ${
           isSelectingGroup
@@ -62,6 +82,7 @@ export default function MapToolbar({ is3D, onToggle3D }: MapToolbarProps) {
         onClick={() => {
           setIsPickingOrigin(!isPickingOrigin);
           if (isSelectingGroup) setIsSelectingGroup(false);
+          if (isDrawingArea) setIsDrawingArea(false);
         }}
         className={`p-1.5 rounded-full transition-colors ${
           isPickingOrigin
@@ -93,7 +114,13 @@ export default function MapToolbar({ is3D, onToggle3D }: MapToolbarProps) {
         </span>
       )}
 
-      {isSelectingGroup && selectedGroupHotspots.length === 0 && (
+      {isDrawingArea && (
+        <span className="text-[11px] text-cyan-400 font-medium animate-pulse pr-1">
+          Drag rectangle to select area
+        </span>
+      )}
+
+      {isSelectingGroup && selectedGroupHotspots.length === 0 && !isDrawingArea && (
         <span className="text-[11px] text-amber-400 font-medium animate-pulse pr-1">
           Click dots to select group
         </span>

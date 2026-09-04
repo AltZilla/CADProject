@@ -37,37 +37,32 @@ export default function SimulationLayer() {
         data: { type: 'FeatureCollection', features: [] },
       });
 
-      const beforeId = map.getLayer('hotspots-circle') ? 'hotspots-circle' : undefined;
+      const beforeId = map.getLayer('hotspots-glow') ? 'hotspots-glow' : (map.getLayer('hotspots-circle') ? 'hotspots-circle' : undefined);
 
-      // Burned interior — all hours behind the leading edge
+      // Burned interior — single unified semi-transparent warm fill for the current burned perimeter
       map.addLayer({
         id: 'sim-fill-burned',
         type: 'fill',
         source: sourceId,
+        filter: ['==', ['get', 'timeframe_hours'], 1],
         paint: {
-          'fill-color': [
-            'interpolate', ['linear'], ['get', 'timeframe_hours'],
-            1, 'rgba(120,53,15,0.35)',      // dark brown — earliest burn
-            6, 'rgba(180,83,9,0.30)',
-            12, 'rgba(217,119,6,0.30)',
-            18, 'rgba(234,179,8,0.25)',
-            24, 'rgba(253,224,71,0.20)',      // faded yellow — recent
-          ],
+          'fill-color': 'rgba(234, 88, 12, 0.20)',
+          'fill-outline-color': 'rgba(234, 88, 12, 0.40)',
         }
       }, beforeId);
 
-      // Leading edge glow — only the current hour perimeter
+      // Leading edge glow — accentuates the active burning front
       map.addLayer({
         id: 'sim-fill-leading',
         type: 'fill',
         source: sourceId,
         filter: ['==', ['get', 'timeframe_hours'], 1],
         paint: {
-          'fill-color': 'rgba(251,146,60,0.45)',
+          'fill-color': 'rgba(251, 146, 60, 0.15)',
         }
       }, beforeId);
 
-      // Outline for all visible perimeters
+      // Isochrone contour outlines for each hour of progression
       map.addLayer({
         id: 'sim-outline',
         type: 'line',
@@ -75,40 +70,43 @@ export default function SimulationLayer() {
         paint: {
           'line-color': [
             'interpolate', ['linear'], ['get', 'timeframe_hours'],
-            1, '#92400e',
+            1, '#b45309',
             6, '#d97706',
             12, '#f59e0b',
             18, '#fbbf24',
             24, '#fef08a',
           ],
-          'line-width': 1.2,
-          'line-opacity': [
-            'interpolate', ['linear'], ['get', 'timeframe_hours'],
-            1, 0.3,
-            24, 0.9,
-          ],
+          'line-width': 1.6,
+          'line-opacity': 0.85,
         }
       }, beforeId);
 
-      // Bright leading edge outline
+      // Bright animated leading edge outline
       map.addLayer({
         id: 'sim-outline-leading',
         type: 'line',
         source: sourceId,
         filter: ['==', ['get', 'timeframe_hours'], 1],
         paint: {
-          'line-color': '#fb923c',
-          'line-width': 3,
+          'line-color': '#f97316',
+          'line-width': 3.5,
           'line-dasharray': [4, 4],
         }
       }, beforeId);
     }
 
     if (visibleData.features.length > 0) {
-      // Update leading edge filter to match current playback hour
+      // Update leading edge filter to match current playback hour (prevents stacking 24 overlapping fills)
       if (leadingHour !== null) {
-        map.setFilter('sim-fill-leading', ['==', ['get', 'timeframe_hours'], leadingHour]);
-        map.setFilter('sim-outline-leading', ['==', ['get', 'timeframe_hours'], leadingHour]);
+        if (map.getLayer('sim-fill-burned')) {
+          map.setFilter('sim-fill-burned', ['==', ['get', 'timeframe_hours'], leadingHour]);
+        }
+        if (map.getLayer('sim-fill-leading')) {
+          map.setFilter('sim-fill-leading', ['==', ['get', 'timeframe_hours'], leadingHour]);
+        }
+        if (map.getLayer('sim-outline-leading')) {
+          map.setFilter('sim-outline-leading', ['==', ['get', 'timeframe_hours'], leadingHour]);
+        }
       }
 
       (map.getSource(sourceId) as maplibregl.GeoJSONSource).setData(visibleData);

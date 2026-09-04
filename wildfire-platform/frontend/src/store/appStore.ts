@@ -27,6 +27,7 @@ interface AppState {
   setIsSelectingGroup: (v: boolean) => void;
   selectedGroupHotspots: [number, number][]; // [lon, lat] pairs
   toggleGroupHotspot: (point: [number, number]) => void;
+  setSelectedGroupHotspots: (points: [number, number][]) => void;
   clearGroupHotspots: () => void;
 
   // Simulation
@@ -58,6 +59,12 @@ interface AppState {
   addDrawnZonePoint: (point: [number, number]) => void;
   undoDrawnZonePoint: () => void;
   resetDrawnZonePoints: () => void;
+
+  // Area selection (rectangle drag to select all hotspots in a region)
+  isDrawingArea: boolean;
+  setIsDrawingArea: (v: boolean) => void;
+  drawnAreaBounds: { start: [number, number]; end: [number, number] } | null;
+  setDrawnAreaBounds: (b: { start: [number, number]; end: [number, number] } | null) => void;
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -83,16 +90,48 @@ export const useAppStore = create<AppState>((set) => ({
       const exists = state.selectedGroupHotspots.some(
         (p) => Math.abs(p[0] - point[0]) < 0.005 && Math.abs(p[1] - point[1]) < 0.005
       );
-      if (exists) {
-        return {
-          selectedGroupHotspots: state.selectedGroupHotspots.filter(
+      const newGroup: [number, number][] = exists
+        ? state.selectedGroupHotspots.filter(
             (p) => !(Math.abs(p[0] - point[0]) < 0.005 && Math.abs(p[1] - point[1]) < 0.005)
-          ),
-        };
-      }
-      return { selectedGroupHotspots: [...state.selectedGroupHotspots, point] };
+          )
+        : [...state.selectedGroupHotspots, point];
+
+      const simUpdates: Partial<SimulationRequest> = newGroup.length > 0 ? {
+        origins: newGroup,
+        origin: newGroup.length === 1
+          ? { type: 'Point', coordinates: newGroup[0] }
+          : { type: 'MultiPoint', coordinates: newGroup },
+      } : { origins: undefined };
+
+      return {
+        selectedGroupHotspots: newGroup,
+        simulationRequest: {
+          ...state.simulationRequest,
+          ...simUpdates,
+        },
+      };
     }),
-  clearGroupHotspots: () => set({ selectedGroupHotspots: [] }),
+  setSelectedGroupHotspots: (points) =>
+    set((state) => ({
+      selectedGroupHotspots: points,
+      simulationRequest: {
+        ...state.simulationRequest,
+        origins: points.length > 0 ? points : undefined,
+        origin: points.length === 1
+          ? { type: 'Point', coordinates: points[0] }
+          : points.length > 1
+          ? { type: 'MultiPoint', coordinates: points }
+          : state.simulationRequest.origin,
+      },
+    })),
+  clearGroupHotspots: () =>
+    set((state) => ({
+      selectedGroupHotspots: [],
+      simulationRequest: {
+        ...state.simulationRequest,
+        origins: undefined,
+      },
+    })),
 
   simulationRequest: {
     hours: 24,
@@ -128,4 +167,9 @@ export const useAppStore = create<AppState>((set) => ({
   undoDrawnZonePoint: () =>
     set((state) => ({ drawnZonePoints: state.drawnZonePoints.slice(0, -1) })),
   resetDrawnZonePoints: () => set({ drawnZonePoints: [] }),
+
+  isDrawingArea: false,
+  setIsDrawingArea: (v) => set({ isDrawingArea: v }),
+  drawnAreaBounds: null,
+  setDrawnAreaBounds: (b) => set({ drawnAreaBounds: b }),
 }));

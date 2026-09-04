@@ -44,6 +44,7 @@ export default function Sidebar() {
       fuel_type: autoFuel,
       hours: 24 as const,
     };
+    useAppStore.getState().setSelectedGroupHotspots(points);
     setSimulationRequest(request);
     setActiveTab('simulation');
     runSim(request as any);

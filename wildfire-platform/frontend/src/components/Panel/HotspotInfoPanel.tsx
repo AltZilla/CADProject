@@ -93,6 +93,7 @@ export default function HotspotInfoPanel() {
       hours: 24 as const
     };
     setSelectedHotspot(null);
+    useAppStore.getState().setSelectedGroupHotspots(points);
     setSimulationRequest(req);
     setActiveTab('simulation');
     runSim(req);

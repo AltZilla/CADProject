@@ -52,13 +52,16 @@ export default function MapContextMenu() {
       fuel_type: autoFuel,
       hours: 24 as const,
     };
+    useAppStore.getState().setSelectedGroupHotspots(points);
     setSimulationRequest(request);
     setActiveTab('simulation');
     runSim(request as any);
   };
 
   const handleSetOrigin = () => {
+    useAppStore.getState().clearGroupHotspots();
     setSimulationRequest({
+      origins: undefined,
       origin: { type: 'Point', coordinates: [pos.lng, pos.lat] }
     });
     setActiveTab('simulation');
