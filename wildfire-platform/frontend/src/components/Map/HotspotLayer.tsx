@@ -1,13 +1,14 @@
-import { useEffect, useRef, useMemo } from 'react';
+import { useEffect, useRef, useMemo, type MutableRefObject } from 'react';
 import maplibregl from 'maplibre-gl';
 import { useMap } from './MapContext';
 import { useAppStore } from '@/store/appStore';
 import { useHotspots } from '@/hooks/useHotspots';
 import { useSimulation } from '@/hooks/useSimulation';
 import { fetchLiveWeather, detectFuelType } from '@/api/weather';
-import { findFireComplex } from '@/utils/clustering';
 import { Zap, X, Flame } from 'lucide-react';
 import type { SimulationRequest } from '@/types/simulation';
+import type { Hotspot } from '@/types/hotspot';
+import { getDetectionCount, getHotspotDisplayKind, getHotspotFrp, HOTSPOT_ZOOM } from '@/utils/hotspotPresentation.js';
 
 function isPointInPoly(pt: [number, number], ring: number[][]): boolean {
   const [x, y] = pt;
@@ -19,6 +20,34 @@ function isPointInPoly(pt: [number, number], ring: number[][]): boolean {
     if (intersect) inside = !inside;
   }
   return inside;
+}
+
+function showAggregateSummary(
+  map: maplibregl.Map,
+  popupRef: MutableRefObject<maplibregl.Popup | null>,
+  coordinates: [number, number],
+  properties: Hotspot,
+  titleText = 'Aggregated detections',
+  noteText = 'This map cell summarizes detections; it is not an individual hotspot.',
+) {
+  const container = document.createElement('div');
+  container.className = 'hotspot-summary-popup';
+
+  const title = document.createElement('strong');
+  title.textContent = titleText;
+  const count = document.createElement('span');
+  count.textContent = `${getDetectionCount(properties).toLocaleString()} detections`;
+  const frp = document.createElement('span');
+  frp.textContent = `${getHotspotFrp(properties).toFixed(1)} MW total FRP`;
+  const note = document.createElement('small');
+  note.textContent = noteText;
+  container.append(title, count, frp, note);
+
+  popupRef.current?.remove();
+  popupRef.current = new maplibregl.Popup({ closeButton: true, closeOnClick: true, maxWidth: '260px' })
+    .setLngLat(coordinates)
+    .setDOMContent(container)
+    .addTo(map);
 }
 
 export default function HotspotLayer() {
@@ -39,17 +68,21 @@ export default function HotspotLayer() {
   const { runSim } = useSimulation();
   
   const sourceId = 'hotspots-source';
+  const clusterLayerId = 'hotspots-clusters';
+  const clusterCountLayerId = 'hotspots-cluster-count';
+  const singletonLayerId = 'hotspots-singletons';
+  const singletonCountLayerId = 'hotspots-singleton-count';
   const heatmapLayerId = 'hotspots-heatmap';
-  const glowLayerId = 'hotspots-glow';
   const circleLayerId = 'hotspots-circle';
-  const innerLayerId = 'hotspots-inner';
+  const aggregateLayerId = 'hotspots-aggregate';
+  const aggregateCountLayerId = 'hotspots-aggregate-count';
   const selectedSourceId = 'hotspots-selected-source';
   const selectedHaloId = 'hotspots-selected-halo';
   const selectedCoreId = 'hotspots-selected-core';
   const originSourceId = 'sim-origin-source';
   const originHaloId = 'sim-origin-halo';
   const originCoreId = 'sim-origin-core';
-  const clusterPopupRef = useRef<maplibregl.Popup | null>(null);
+  const aggregatePopupRef = useRef<maplibregl.Popup | null>(null);
 
   // Active perimeters at the current playback hour
   const currentPerimeterPolys = useMemo(() => {
@@ -100,250 +133,194 @@ export default function HotspotLayer() {
         data: { type: 'FeatureCollection', features: [] },
         tolerance: 0,
         buffer: 128,
+        cluster: true,
+        clusterRadius: 60,
+        clusterMaxZoom: 4,
+        clusterProperties: {
+          detection_count: ['+', ['to-number', ['coalesce', ['get', 'count'], 1]]],
+          frp_total: ['+', ['to-number', ['coalesce', ['get', 'total_frp'], ['get', 'frp'], 0]]],
+        },
       });
 
-      // 1. Heatmap density layer with smooth crossfade between zoom 4 and 10.5
+      // Count-weighted density gives a geographic concentration view, independent of FRP.
       map.addLayer({
         id: heatmapLayerId,
         type: 'heatmap',
         source: sourceId,
-        maxzoom: 11,
+        minzoom: HOTSPOT_ZOOM.densityStart,
+        maxzoom: HOTSPOT_ZOOM.densityEnd,
         paint: {
-          'heatmap-weight': [
-            'interpolate', ['exponential', 1.3], ['get', 'frp'],
-            0, 0.12,
-            30, 0.40,
-            100, 0.75,
-            300, 1.0
-          ],
+          'heatmap-weight': ['to-number', ['coalesce', ['get', 'detection_count'], ['get', 'count'], 1]],
           'heatmap-intensity': [
             'interpolate', ['linear'], ['zoom'],
-            0, 0.55,
-            3, 0.90,
-            6, 1.4,
-            9, 2.4
+            3.8, 0.55,
+            6, 0.9,
+            8.5, 1.15,
           ],
           'heatmap-color': [
             'interpolate', ['linear'], ['heatmap-density'],
             0.00, 'rgba(0, 0, 0, 0)',
-            0.10, 'rgba(251, 191, 36, 0.40)',  // Vivid amber-gold
-            0.30, 'rgba(249, 115, 22, 0.68)',  // Fiery flame orange
-            0.55, 'rgba(239, 68, 68, 0.82)',   // Wildfire scarlet
-            0.80, 'rgba(220, 38, 38, 0.90)',   // Deep crimson
-            1.00, 'rgba(254, 240, 138, 0.98)'  // White-hot incandescent thermal core
+            0.12, 'rgba(251, 191, 36, 0.38)',
+            0.35, 'rgba(249, 115, 22, 0.55)',
+            0.7, 'rgba(220, 38, 38, 0.68)',
           ],
           'heatmap-radius': [
             'interpolate', ['linear'], ['zoom'],
-            0, 5.0,
-            3, 8.5,
-            6, 15.0,
-            9, 24.0
+            3.8, 10,
+            6, 17,
+            8.5, 24,
           ],
           'heatmap-opacity': [
             'interpolate', ['linear'], ['zoom'],
-            0, 0.78,
-            3, 0.80,
-            6, 0.70,
-            8.5, 0.45,
-            10.5, 0.0
+            3.8, 0,
+            4.5, 0.42,
+            6, 0.38,
+            8.25, 0.34,
+            8.5, 0,
           ],
-        }
+        },
       });
 
-      // 2. Soft glowing heat halo underneath individual hotspots (visible even in 3D terrain)
       map.addLayer({
-        id: glowLayerId,
+        id: clusterLayerId,
         type: 'circle',
         source: sourceId,
-        minzoom: 4,
+        filter: ['has', 'point_count'],
+        maxzoom: HOTSPOT_ZOOM.clustersEnd,
         paint: {
-          'circle-pitch-alignment': 'map',
-          'circle-pitch-scale': 'viewport',
           'circle-radius': [
-            'interpolate', ['linear'], ['zoom'],
-            4, 5,
-            7, 9,
-            10, 14,
-            13, 20,
-            16, 28
+            'interpolate', ['linear'], ['get', 'detection_count'],
+            2, 10,
+            20, 15,
+            100, 19,
+            500, 24,
           ],
-          'circle-color': [
-            'case',
-            ['==', ['get', 'is_burned'], true],
-            'rgba(234, 88, 12, 0.25)',
-            [
-              'interpolate', ['linear'], ['get', 'frp'],
-              0, 'rgba(249, 115, 22, 0.20)',
-              30, 'rgba(239, 68, 68, 0.35)',
-              100, 'rgba(220, 38, 38, 0.45)'
-            ]
-          ],
-          'circle-blur': 0.8,
-          'circle-opacity': 0.75,
-        }
+          'circle-color': '#f97316',
+          'circle-opacity': ['interpolate', ['linear'], ['zoom'], 3.8, 0.9, 4.5, 0],
+          'circle-stroke-color': '#fff7ed',
+          'circle-stroke-width': 1.5,
+          'circle-stroke-opacity': ['interpolate', ['linear'], ['zoom'], 3.8, 0.9, 4.5, 0],
+        },
       });
 
-      // 3. Primary high-contrast hotspot dot — anchored to 3D terrain with razor-sharp dark outline
+      map.addLayer({
+        id: clusterCountLayerId,
+        type: 'symbol',
+        source: sourceId,
+        filter: ['has', 'point_count'],
+        maxzoom: HOTSPOT_ZOOM.clustersEnd,
+        layout: {
+          'text-field': ['to-string', ['get', 'detection_count']],
+          'text-font': ['Open Sans Bold'],
+          'text-size': 11,
+        },
+        paint: {
+          'text-color': '#fff',
+          'text-opacity': ['interpolate', ['linear'], ['zoom'], 3.8, 1, 4.5, 0],
+          'text-halo-color': '#9a3412',
+          'text-halo-width': 0.5,
+        },
+      });
+
+      // Unclustered detections remain visible at world scale as small, unlabeled points.
+      map.addLayer({
+        id: singletonLayerId,
+        type: 'circle',
+        source: sourceId,
+        filter: ['!', ['has', 'point_count']],
+        maxzoom: HOTSPOT_ZOOM.clustersEnd,
+        paint: {
+          'circle-radius': ['case', ['==', ['get', 'clustered'], true], 6, 3],
+          'circle-color': ['case', ['==', ['get', 'clustered'], true], '#ea580c', '#f97316'],
+          'circle-opacity': ['interpolate', ['linear'], ['zoom'], 3.8, 0.88, 4.5, 0],
+          'circle-stroke-color': '#fff7ed',
+          'circle-stroke-width': 1,
+        },
+      });
+
+      map.addLayer({
+        id: singletonCountLayerId,
+        type: 'symbol',
+        source: sourceId,
+        filter: ['all', ['!', ['has', 'point_count']], ['==', ['get', 'clustered'], true]],
+        maxzoom: HOTSPOT_ZOOM.clustersEnd,
+        layout: {
+          'text-field': ['to-string', ['get', 'count']],
+          'text-font': ['Open Sans Bold'],
+          'text-size': 9,
+        },
+        paint: {
+          'text-color': '#fff',
+          'text-opacity': ['interpolate', ['linear'], ['zoom'], 3.8, 1, 4.5, 0],
+          'text-halo-color': '#9a3412',
+          'text-halo-width': 0.5,
+        },
+      });
+
+      map.addLayer({
+        id: aggregateLayerId,
+        type: 'circle',
+        source: sourceId,
+        filter: ['all', ['!', ['has', 'point_count']], ['==', ['get', 'clustered'], true]],
+        minzoom: HOTSPOT_ZOOM.pointsStart,
+        paint: {
+          'circle-radius': [
+            'interpolate', ['linear'], ['get', 'count'],
+            2, 8,
+            20, 13,
+            100, 18,
+          ],
+          'circle-color': '#c2410c',
+          'circle-opacity': 0.88,
+          'circle-stroke-color': '#fff7ed',
+          'circle-stroke-width': 1.5,
+        },
+      });
+
+      map.addLayer({
+        id: aggregateCountLayerId,
+        type: 'symbol',
+        source: sourceId,
+        filter: ['all', ['!', ['has', 'point_count']], ['==', ['get', 'clustered'], true]],
+        minzoom: HOTSPOT_ZOOM.pointsStart,
+        layout: {
+          'text-field': ['to-string', ['get', 'count']],
+          'text-font': ['Open Sans Bold'],
+          'text-size': 10,
+        },
+        paint: {
+          'text-color': '#fff',
+          'text-halo-color': '#7c2d12',
+          'text-halo-width': 0.75,
+        },
+      });
+
       map.addLayer({
         id: circleLayerId,
         type: 'circle',
         source: sourceId,
-        minzoom: 4,
+        filter: ['all', ['!', ['has', 'point_count']], ['!=', ['get', 'clustered'], true]],
+        minzoom: HOTSPOT_ZOOM.pointsStart,
         paint: {
-          'circle-pitch-alignment': 'map',
-          'circle-pitch-scale': 'viewport',
           'circle-radius': [
-            'case',
-            ['==', ['get', 'is_burned'], true],
-            ['interpolate', ['linear'], ['zoom'], 4, 3.0, 7, 5.0, 10, 8.0, 13, 11.5, 16, 16],
-            ['interpolate', ['linear'], ['zoom'], 4, 3.5, 7, 5.5, 10, 8.5, 13, 12.0, 16, 17]
+            'interpolate', ['linear'], ['to-number', ['coalesce', ['get', 'frp'], 0]],
+            0, 3,
+            25, 3.8,
+            100, 5,
+            300, 6.3,
           ],
           'circle-color': [
-            'case',
-            ['==', ['get', 'is_burned'], true],
-            '#ea580c', // Bright glowing ember core (never invisible grey!)
-            [
-              'interpolate', ['linear'], ['get', 'frp'],
-              0, '#f97316',      // Crisp visible amber-orange (never pale washed-out yellow)
-              15, '#ea580c',
-              50, '#ef4444',     // Crimson
-              150, '#b91c1c'     // Intense fire red
-            ]
+            'interpolate', ['linear'], ['to-number', ['coalesce', ['get', 'frp'], 0]],
+            0, '#fbbf24',
+            25, '#f97316',
+            100, '#ef4444',
+            300, '#b91c1c',
           ],
-          'circle-opacity': 0.95,
-          'circle-stroke-color': [
-            'case',
-            ['==', ['get', 'is_burned'], true],
-            '#ffffff', // White ignition rim
-            '#0f172a'  // Dark slate border for supreme contrast on light basemaps & satellite
-          ],
-          'circle-stroke-width': [
-            'interpolate', ['linear'], ['zoom'],
-            4, 1.0,
-            8, 1.8,
-            13, 2.4
-          ],
-          'circle-stroke-opacity': 0.95,
-        }
+          'circle-opacity': ['case', ['==', ['get', 'is_burned'], true], 0.48, 0.94],
+          'circle-stroke-color': '#fff7ed',
+          'circle-stroke-width': 1.25,
+        },
       });
-
-      // 4. White-hot inner thermal core for authentic satellite VIIRS signature
-      map.addLayer({
-        id: innerLayerId,
-        type: 'circle',
-        source: sourceId,
-        minzoom: 6,
-        paint: {
-          'circle-pitch-alignment': 'map',
-          'circle-pitch-scale': 'viewport',
-          'circle-radius': [
-            'interpolate', ['linear'], ['zoom'],
-            6, 1.5,
-            10, 3.0,
-            14, 4.5
-          ],
-          'circle-color': '#ffffff',
-          'circle-opacity': 0.92,
-        }
-      });
-
-      const handleClusterClick = (lngLat: maplibregl.LngLat) => {
-        const rawFeatures = data?.features || [];
-        const complex = findFireComplex(lngLat.lng, lngLat.lat, rawFeatures, 12.0);
-
-        clusterPopupRef.current?.remove();
-
-        const container = document.createElement('div');
-        container.className = 'text-xs';
-        container.innerHTML = `
-          <div style="background: #0f172a; color: #e2e8f0; padding: 14px; border-radius: 14px; min-width: 250px; font-family: system-ui; box-shadow: 0 20px 30px -10px rgba(0,0,0,0.7); border: 1px solid rgba(251,146,60,0.3);">
-            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
-              <div style="font-weight: 700; color: #fb923c; font-size: 13px; display: flex; align-items: center; gap: 5px;">
-                🔥 ${complex.count > 1 ? 'Fire Complex' : 'Active Hotspot'}
-              </div>
-              <span style="font-size: 10px; background: rgba(249,115,22,0.25); color: #fed7aa; padding: 2px 7px; border-radius: 999px; font-weight: 700;">
-                ${complex.count} ${complex.count === 1 ? 'detection' : 'detections'}
-              </span>
-            </div>
-            
-            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 12px; font-size: 11px;">
-              <div style="background: rgba(30,41,59,0.85); padding: 7px; border-radius: 8px; border: 1px solid rgba(51,65,85,0.7);">
-                <div style="color: #94a3b8; font-size: 10px;">Total FRP</div>
-                <div style="color: #f97316; font-weight: 700; font-size: 12px;">${complex.totalFrp.toFixed(1)} MW</div>
-              </div>
-              <div style="background: rgba(30,41,59,0.85); padding: 7px; border-radius: 8px; border: 1px solid rgba(51,65,85,0.7);">
-                <div style="color: #94a3b8; font-size: 10px;">Peak FRP</div>
-                <div style="color: #ef4444; font-weight: 700; font-size: 12px;">${complex.maxFrp.toFixed(1)} MW</div>
-              </div>
-            </div>
-
-            <button id="sim-complex-btn" style="width: 100%; padding: 9px 12px; background: linear-gradient(to right, #ea580c, #dc2626); color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 11px; font-weight: 700; display: flex; align-items: center; justify-content: center; gap: 6px; box-shadow: 0 4px 15px rgba(234,88,12,0.4); margin-bottom: 6px;">
-              ⚡ ${complex.count > 1 ? `Simulate Entire Complex (${complex.count} pts)` : 'Simulate Fire Spread'}
-            </button>
-
-            ${complex.count > 1 ? `
-              <button id="sim-single-btn" style="width: 100%; padding: 5px 8px; background: transparent; color: #94a3b8; border: 1px solid #334155; border-radius: 6px; cursor: pointer; font-size: 10px; font-weight: 500;">
-                Simulate single center point only
-              </button>
-            ` : ''}
-          </div>
-        `;
-
-        clusterPopupRef.current = new maplibregl.Popup({
-          closeButton: true,
-          closeOnClick: true,
-          anchor: 'bottom',
-          offset: 12,
-        })
-          .setLngLat(lngLat)
-          .setDOMContent(container)
-          .addTo(map);
-
-        setTimeout(() => {
-          const runSimulationWithPoints = async (points: [number, number][]) => {
-            clusterPopupRef.current?.remove();
-            useAppStore.getState().setSelectedGroupHotspots(points);
-
-            const centerLon = points.reduce((a, b) => a + b[0], 0) / points.length;
-            const centerLat = points.reduce((a, b) => a + b[1], 0) / points.length;
-
-            if (map) {
-              map.flyTo({
-                center: [centerLon, centerLat],
-                zoom: Math.max(map.getZoom(), 11.5),
-                pitch: 45,
-                duration: 1200,
-              });
-            }
-
-            const weather = await fetchLiveWeather(centerLat, centerLon);
-            const autoFuel = detectFuelType(weather);
-            setDetectedFuelType(autoFuel);
-
-            const request = {
-              origins: points,
-              origin: points.length === 1 ? { type: 'Point' as const, coordinates: points[0] } : { type: 'MultiPoint' as const, coordinates: points },
-              wind_speed_ms: weather.wind_speed_ms,
-              wind_direction_deg: weather.wind_direction_deg,
-              fuel_type: autoFuel,
-              hours: 24 as const,
-            };
-            setSimulationRequest(request);
-            setActiveTab('simulation');
-            runSim(request as any);
-          };
-
-          const compBtn = document.getElementById('sim-complex-btn');
-          if (compBtn) {
-            compBtn.addEventListener('click', () => runSimulationWithPoints(complex.points));
-          }
-
-          const singleBtn = document.getElementById('sim-single-btn');
-          if (singleBtn) {
-            singleBtn.addEventListener('click', () => runSimulationWithPoints([[lngLat.lng, lngLat.lat]]));
-          }
-        }, 50);
-      };
 
       // Selection Halo and Core layers for manually selected hotspot group
       if (!map.getSource(selectedSourceId)) {
@@ -437,48 +414,86 @@ export default function HotspotLayer() {
         });
       }
 
-      map.on('click', circleLayerId, (e) => {
-        if (!e.lngLat) return;
-        if (useAppStore.getState().isSelectingGroup) {
-          const feat = e.features?.[0];
-          if (feat && feat.geometry && feat.geometry.type === 'Point') {
-            const coords = (feat.geometry as GeoJSON.Point).coordinates as [number, number];
-            useAppStore.getState().toggleGroupHotspot(coords);
-          } else {
-            useAppStore.getState().toggleGroupHotspot([e.lngLat.lng, e.lngLat.lat]);
-          }
-          return;
-        }
-        handleClusterClick(e.lngLat);
+      map.on('click', clusterLayerId, (event) => {
+        const feature = event.features?.[0];
+        const clusterId = Number(feature?.properties?.cluster_id);
+        if (!Number.isFinite(clusterId) || feature?.geometry.type !== 'Point') return;
+        const clusterCenter = feature.geometry.coordinates as [number, number];
+
+        const clusterProperties: Hotspot = {
+          hotspot_id: `cluster-${clusterId}`,
+          clustered: true,
+          count: getDetectionCount(feature.properties),
+          total_frp: Number(feature.properties?.frp_total ?? 0),
+          longitude: clusterCenter[0],
+          latitude: clusterCenter[1],
+        };
+        showAggregateSummary(
+          map,
+          aggregatePopupRef,
+          clusterCenter,
+          clusterProperties,
+          'Hotspot cluster',
+          'Cluster total; zooming in to show its detections.',
+        );
+
+        const source = map.getSource(sourceId) as maplibregl.GeoJSONSource;
+        void source.getClusterExpansionZoom(clusterId).then((zoom) => {
+          if (!map.getSource(sourceId)) return;
+          map.easeTo({ center: clusterCenter, zoom, duration: 650 });
+        }).catch(() => {});
       });
 
-      map.on('click', heatmapLayerId, (e) => {
-        if (!e.lngLat) return;
-        if (useAppStore.getState().isSelectingGroup) {
-          useAppStore.getState().toggleGroupHotspot([e.lngLat.lng, e.lngLat.lat]);
-          return;
-        }
-        handleClusterClick(e.lngLat);
+      map.on('click', heatmapLayerId, (event) => {
+        map.easeTo({
+          center: [event.lngLat.lng, event.lngLat.lat],
+          zoom: Math.min(map.getZoom() + 2, HOTSPOT_ZOOM.pointsStart),
+          duration: 650,
+        });
       });
 
-      map.on('mouseenter', circleLayerId, () => {
-        map.getCanvas().style.cursor = 'pointer';
+      const handleHotspotClick = (event: maplibregl.MapLayerMouseEvent) => {
+        const feature = event.features?.[0];
+        if (!feature || feature.geometry.type !== 'Point') return;
+        const properties = feature.properties as Hotspot;
+        const coordinates = feature.geometry.coordinates as [number, number];
+
+        if (getHotspotDisplayKind(properties) === 'aggregate') {
+          showAggregateSummary(map, aggregatePopupRef, coordinates, properties);
+          return;
+        }
+
+        aggregatePopupRef.current?.remove();
+        if (useAppStore.getState().isSelectingGroup) {
+          useAppStore.getState().toggleGroupHotspot(coordinates);
+          return;
+        }
+
+        setSelectedHotspot({
+          ...properties,
+          longitude: Number(properties.longitude ?? coordinates[0]),
+          latitude: Number(properties.latitude ?? coordinates[1]),
+        });
+      };
+
+      map.on('click', circleLayerId, handleHotspotClick);
+      map.on('click', aggregateLayerId, handleHotspotClick);
+      map.on('click', singletonLayerId, handleHotspotClick);
+
+      const interactiveLayerIds = [clusterLayerId, singletonLayerId, circleLayerId, aggregateLayerId];
+      interactiveLayerIds.forEach((layerId) => {
+        map.on('mouseenter', layerId, () => { map.getCanvas().style.cursor = 'pointer'; });
+        map.on('mouseleave', layerId, () => { map.getCanvas().style.cursor = ''; });
       });
-      map.on('mouseleave', circleLayerId, () => {
-        map.getCanvas().style.cursor = '';
-      });
-      map.on('mouseenter', heatmapLayerId, () => {
-        map.getCanvas().style.cursor = 'pointer';
-      });
-      map.on('mouseleave', heatmapLayerId, () => {
-        map.getCanvas().style.cursor = '';
-      });
+
+      map.on('mouseenter', heatmapLayerId, () => { map.getCanvas().style.cursor = 'zoom-in'; });
+      map.on('mouseleave', heatmapLayerId, () => { map.getCanvas().style.cursor = ''; });
     }
 
     return () => {
-      clusterPopupRef.current?.remove();
+      aggregatePopupRef.current?.remove();
     };
-  }, [map, data, setSelectedHotspot]);
+  }, [map, setSelectedHotspot]);
 
   // Push updated GeoJSON to MapLibre whenever raw data or active/burned state changes
   useEffect(() => {
@@ -486,7 +501,10 @@ export default function HotspotLayer() {
       (map.getSource(sourceId) as maplibregl.GeoJSONSource).setData(enrichedData);
     }
     // Keep hotspot and ignition markers elevated above 3D terrain fills
-    const topLayers = [glowLayerId, circleLayerId, innerLayerId, originHaloId, originCoreId, selectedHaloId, selectedCoreId];
+    const topLayers = [
+      clusterLayerId, clusterCountLayerId, singletonLayerId, singletonCountLayerId,
+      aggregateLayerId, aggregateCountLayerId, circleLayerId, selectedHaloId, selectedCoreId, originHaloId, originCoreId,
+    ];
     topLayers.forEach((id) => {
       if (map && map.getLayer(id)) {
         try {
@@ -574,31 +592,52 @@ export default function HotspotLayer() {
     runSim(request);
   };
 
-  if (selectedGroupHotspots.length === 0) return null;
-
   return (
-    <div className="absolute top-16 left-1/2 -translate-x-1/2 z-40 flex items-center gap-3 bg-slate-900/95 backdrop-blur-md border border-amber-500/50 rounded-2xl px-4 py-2.5 shadow-2xl animate-in slide-in-from-top-4">
-      <div className="flex items-center gap-2">
-        <span className="w-2.5 h-2.5 rounded-full bg-amber-400 animate-ping" />
-        <span className="text-xs font-bold text-amber-300">
-          {selectedGroupHotspots.length} {selectedGroupHotspots.length === 1 ? 'Hotspot' : 'Hotspots'} Selected
-        </span>
+    <>
+      <div className="absolute left-3 top-16 z-30 w-[214px] rounded-lg border border-slate-700/90 bg-slate-950/90 px-3 py-2.5 text-slate-100 shadow-lg backdrop-blur-sm">
+        <div className="mb-2 text-[11px] font-semibold text-slate-200">Hotspot key</div>
+        <div className="flex items-center justify-between gap-1.5 text-[10px] text-slate-400">
+          <span>Density</span>
+          <span>Sparse</span>
+          <span className="h-2 w-16 rounded-full bg-gradient-to-r from-amber-300 via-orange-500 to-red-700" aria-hidden="true" />
+          <span>Dense</span>
+        </div>
+        <div className="mt-2 flex items-center justify-between gap-2 text-[10px] text-slate-400">
+          <span>FRP (MW)</span>
+          <span className="flex items-center gap-2" aria-label="Marker color and size increase with FRP">
+            <i className="h-2 w-2 rounded-full border border-orange-100 bg-amber-400" />
+            <i className="h-2.5 w-2.5 rounded-full border border-orange-100 bg-orange-500" />
+            <i className="h-3 w-3 rounded-full border border-orange-100 bg-red-600" />
+          </span>
+          <span>Higher</span>
+        </div>
       </div>
-      <button
-        onClick={handleRunGroupForecast}
-        disabled={simulationLoading}
-        className="px-3.5 py-1.5 bg-gradient-to-r from-orange-500 to-red-600 hover:from-orange-600 hover:to-red-700 text-white rounded-xl text-xs font-bold shadow-lg shadow-orange-500/30 flex items-center gap-1.5 transition-all disabled:opacity-50"
-      >
-        <Zap size={14} className="fill-current" />
-        {simulationLoading ? 'Simulating...' : `Run Multi-Point Forecast (${selectedGroupHotspots.length})`}
-      </button>
-      <button
-        onClick={() => clearGroupHotspots()}
-        className="p-1 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800 text-xs transition-colors"
-        title="Clear selection"
-      >
-        <X size={14} />
-      </button>
-    </div>
+      {selectedGroupHotspots.length > 0 && (
+        <div className="absolute top-16 left-1/2 -translate-x-1/2 z-40 flex items-center gap-3 bg-slate-900/95 backdrop-blur-md border border-amber-500/50 rounded-xl px-4 py-2.5 shadow-2xl">
+          <div className="flex items-center gap-2">
+            <span className="w-2.5 h-2.5 rounded-full bg-amber-400" />
+            <span className="text-xs font-bold text-amber-300">
+              {selectedGroupHotspots.length} {selectedGroupHotspots.length === 1 ? 'Hotspot' : 'Hotspots'} Selected
+            </span>
+          </div>
+          <button
+            onClick={handleRunGroupForecast}
+            disabled={simulationLoading}
+            className="px-3 py-1.5 bg-orange-600 hover:bg-orange-700 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors disabled:opacity-50"
+          >
+            <Zap size={14} className="fill-current" />
+            {simulationLoading ? 'Simulating...' : `Run Forecast (${selectedGroupHotspots.length})`}
+          </button>
+          <button
+            onClick={() => clearGroupHotspots()}
+            className="p-1 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800 text-xs transition-colors"
+            title="Clear selection"
+            aria-label="Clear selected hotspots"
+          >
+            <X size={14} />
+          </button>
+        </div>
+      )}
+    </>
   );
 }

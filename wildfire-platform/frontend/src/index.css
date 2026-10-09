@@ -15,6 +15,21 @@
 }
 .maplibregl-popup-tip { display: none; }
 
+.hotspot-summary-popup {
+  display: grid;
+  gap: 6px;
+  min-width: 210px;
+  padding: 12px 14px;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.96);
+  color: #e2e8f0;
+  box-shadow: 0 12px 28px rgba(2, 6, 23, 0.35);
+  font-size: 12px;
+}
+.hotspot-summary-popup strong { color: #fdba74; font-size: 13px; }
+.hotspot-summary-popup small { color: #94a3b8; line-height: 1.4; }
+
 /* Range input orange thumb */
 input[type=range]::-webkit-slider-thumb {
   background: #f97316;

@@ -13,11 +13,13 @@ import AreaSelectOverlay from './AreaSelectOverlay';
 import TimelineControls from '../Simulation/TimelineControls';
 import IncidentShowcase from '../Simulation/IncidentShowcase';
 import WindCompass from './WindCompass';
+import { DEFAULT_MAP_PROJECTION, getProjectionSpecification, type MapProjection } from './mapProjection.js';
 
 export default function FireMap() {
   const mapRef = useRef<HTMLDivElement>(null);
   const [mapInstance, setMapInstance] = useState<maplibregl.Map | null>(null);
   const [is3D, setIs3D] = useState(false);
+  const [projection, setProjection] = useState<MapProjection>(DEFAULT_MAP_PROJECTION);
 
   const setMapBbox = useAppStore(s => s.setMapBbox);
   const isPickingOrigin = useAppStore(s => s.isPickingOrigin);
@@ -32,14 +34,32 @@ export default function FireMap() {
   useEffect(() => {
     if (!mapRef.current || mapInstance) return;
 
+    const mapTilerKey = import.meta.env.VITE_MAPTILER_KEY?.trim();
+    const mapTilerStyleId = import.meta.env.VITE_MAPTILER_STYLE_ID?.trim() || 'streets-v4';
+    const mapStyle = import.meta.env.VITE_MAP_STYLE?.trim() || (mapTilerKey
+      ? `https://api.maptiler.com/maps/${encodeURIComponent(mapTilerStyleId)}/style.json?key=${encodeURIComponent(mapTilerKey)}`
+      : 'https://tiles.openfreemap.org/styles/liberty');
+
     const map = new maplibregl.Map({
       container: mapRef.current,
-      style: import.meta.env.VITE_MAP_STYLE || 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
-      center: [-110, 40],
-      zoom: 4,
+      style: mapStyle,
+      center: [-20, 20],
+      zoom: 1.7,
+      maxZoom: 22,
       maxPitch: 70,
+      dragPan: {
+        linearity: 0.25,
+        maxSpeed: 1400,
+        deceleration: 2500,
+        easing: (t) => t * (2 - t),
+      },
       attributionControl: { compact: false },
     });
+    map.on('error', (event) => {
+      const message = event.error?.message?.replace(/([?&]key=)[^&\s]+/gi, '$1[REDACTED]');
+      console.error('[MapLibre]', message || 'Map resource failed to load');
+    });
+    map.scrollZoom.setWheelZoomRate(1 / 600);
 
     map.on('load', () => {
       // 3D Terrain & Hillshade DEM source (AWS Terrarium — global elevation)
@@ -51,17 +71,17 @@ export default function FireMap() {
         maxzoom: 15,
       });
 
-      // Photorealistic 3D hillshade layer
+      // Keep relief subtle on the road basemap; 3D terrain is enabled on demand.
       map.addLayer({
         id: 'hillshade-layer',
         type: 'hillshade',
         source: 'terrain-dem',
         paint: {
-          'hillshade-shadow-color': '#020617',
-          'hillshade-highlight-color': '#475569',
-          'hillshade-accent-color': '#1e293b',
+          'hillshade-shadow-color': '#778277',
+          'hillshade-highlight-color': '#f7faf7',
+          'hillshade-accent-color': '#a6b3a7',
           'hillshade-illumination-direction': 315,
-          'hillshade-exaggeration': 0.35,
+          'hillshade-exaggeration': 0.04,
         },
       }, map.getStyle().layers.find(l => l.type === 'symbol')?.id);
 
@@ -134,6 +154,11 @@ export default function FireMap() {
       map.remove();
     };
   }, []);
+
+  useEffect(() => {
+    if (!mapInstance) return;
+    mapInstance.setProjection(getProjectionSpecification(projection));
+  }, [mapInstance, projection]);
 
   // Toggle 3D terrain on/off
   const toggle3D = () => {
@@ -240,7 +265,12 @@ export default function FireMap() {
         </MapContext.Provider>
       )}
       <MapContextMenu />
-      <MapToolbar is3D={is3D} onToggle3D={toggle3D} />
+      <MapToolbar
+        is3D={is3D}
+        onToggle3D={toggle3D}
+        projection={projection}
+        onProjectionChange={setProjection}
+      />
       <WindCompass />
       <IncidentShowcase />
       <TimelineControls />

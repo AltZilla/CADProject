@@ -8,6 +8,7 @@ import AlertZoneEditor from './AlertZoneEditor';
 import Button from '../UI/Button';
 import { formatPoint } from '@/utils/geo';
 import { findFireComplex } from '@/utils/clustering';
+import { getDetectionCount, getHotspotDisplayKind } from '@/utils/hotspotPresentation.js';
 
 export default function Sidebar() {
   const activeTab = useAppStore(s => s.activeTab);
@@ -19,14 +20,21 @@ export default function Sidebar() {
   const { runSim } = useSimulation();
   const simulationLoading = useAppStore(s => s.simulationLoading);
 
-  const hotspots = data?.features.map(f => f.properties) || [];
-  const topHotspots = [...hotspots].sort((a, b) => (b.frp ?? b.total_frp ?? 0) - (a.frp ?? a.total_frp ?? 0)).slice(0, 8);
+  const features = data?.features || [];
+  const hotspots = features.map(f => f.properties);
+  const detectionCount = hotspots.reduce((total, h) => total + getDetectionCount(h), 0);
+  const topHotspots = hotspots
+    .filter(h => getHotspotDisplayKind(h) === 'detection')
+    .sort((a, b) => (b.frp ?? 0) - (a.frp ?? 0))
+    .slice(0, 8);
+  const hasAggregates = hotspots.some(h => getHotspotDisplayKind(h) === 'aggregate');
 
   const handleQuickSim = async (h: any) => {
     const lat = h.latitude ?? h.lat ?? 0;
     const lon = h.longitude ?? h.lon ?? 0;
 
-    const complex = findFireComplex(lon, lat, data?.features || [], 12.0);
+    const individualFeatures = features.filter(feature => feature.properties.clustered !== true);
+    const complex = findFireComplex(lon, lat, individualFeatures, 12.0);
     const points = complex.points;
     const origin = points.length === 1 ? { type: 'Point' as const, coordinates: points[0] } : { type: 'MultiPoint' as const, coordinates: points };
     const centerLon = complex.center[0];
@@ -93,7 +101,10 @@ export default function Sidebar() {
               </Button>
             </div>
             
-            <div className="text-2xl font-bold text-slate-100">{hotspots.length}</div>
+            <div className="text-2xl font-bold text-slate-100">{detectionCount.toLocaleString()}</div>
+            {hasAggregates && (
+              <p className="-mt-3 text-[11px] text-slate-500">Includes aggregated map cells; point details are shown when available.</p>
+            )}
 
             {isFetching && hotspots.length === 0 && (
               <p className="text-xs text-slate-400">Checking the current map view for active fire detections...</p>
@@ -113,7 +124,7 @@ export default function Sidebar() {
 
             {topHotspots.length > 0 && (
               <div className="space-y-2 mt-4">
-                <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Top by Intensity (FRP)</h3>
+                <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Strongest Individual Detections (FRP)</h3>
                 {topHotspots.map(h => (
                   <div 
                     key={h.hotspot_id}
@@ -141,6 +152,9 @@ export default function Sidebar() {
                   </div>
                 ))}
               </div>
+            )}
+            {!isFetching && !hotspotsError && hasAggregates && topHotspots.length === 0 && (
+              <p className="text-xs text-slate-400">The API returned aggregated cells for this view; individual hotspot records are unavailable.</p>
             )}
           </div>
         )}

@@ -188,11 +188,22 @@ Deploy the 4 backend services with **Python 3.12**:
 ### 3. Frontend Hosting
 ```bash
 cd frontend
+# Set a MapTiler API key restricted to your deployed HTTP origin.
+# VITE_* values are embedded in the client bundle; this key is public, not secret.
+export VITE_MAPTILER_KEY="paste-your-restricted-key"
+export VITE_MAPTILER_STYLE_ID=01a1005c-9e31-702d-a792-5d6b5a578af9
 npm run build
 
 # Upload dist/ folder to your S3 bucket or CloudFront distribution
 aws s3 sync dist/ s3://<YOUR_FRONTEND_BUCKET_NAME> --delete
 ```
+
+The frontend uses the MapTiler Cloud map selected by `VITE_MAPTILER_STYLE_ID`
+(`streets-v4` when omitted) whenever `VITE_MAPTILER_KEY` is set. Without a key,
+it falls back to OpenFreeMap Liberty so local development still works. Set
+`VITE_MAP_STYLE` to a complete style URL to override either option. Restrict the
+public MapTiler key to your production CloudFront/custom domain before building
+for deployment.
 
 ---
 
