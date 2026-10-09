@@ -3,6 +3,8 @@ import { useMap } from './MapContext';
 import { useAppStore } from '@/store/appStore';
 import { useHotspots } from '@/hooks/useHotspots';
 import { fetchLiveWeather, detectFuelType } from '@/api/weather';
+import type { FireClass } from '@/types/hotspot';
+import { classifyHotspot } from '@/utils/classifyHotspot';
 
 /**
  * AreaSelectOverlay renders an interactive rectangle drag selection
@@ -17,6 +19,7 @@ export default function AreaSelectOverlay() {
   const setSelectedGroupHotspots = useAppStore((s) => s.setSelectedGroupHotspots);
   const setDetectedFuelType = useAppStore((s) => s.setDetectedFuelType);
   const setSimulationRequest = useAppStore((s) => s.setSimulationRequest);
+  const activeFireClasses = useAppStore((s) => s.activeFireClasses);
   const { data } = useHotspots();
 
   const [dragStart, setDragStart] = useState<{ x: number; y: number } | null>(null);
@@ -90,6 +93,11 @@ export default function AreaSelectOverlay() {
       const lat = coords[1];
 
       if (lon >= minLon && lon <= maxLon && lat >= minLat && lat <= maxLat) {
+        const props = f.properties || {};
+        const fireClass: FireClass = props.fire_class ?? classifyHotspot(props).fire_class;
+        // Only select hotspots that belong to currently active/visible fire classes
+        if (!activeFireClasses.has(fireClass)) return;
+
         // Deduplicate coordinates within ~100m to prevent redundant origin cells
         const key = `${lon.toFixed(3)},${lat.toFixed(3)}`;
         if (!pointsMap.has(key)) {
@@ -126,13 +134,13 @@ export default function AreaSelectOverlay() {
       // 4. Close selection mode
       setIsDrawingArea(false);
     } else {
-      setToastMessage('No active hotspots found in the selected box. Try dragging over fire dots.');
+      setToastMessage('No visible hotspots found in the selected box matching your active filters.');
       setTimeout(() => setToastMessage(null), 3500);
     }
 
     setDragStart(null);
     setDragCurrent(null);
-  }, [isDrawingArea, dragStart, map, data, setSelectedGroupHotspots, setDetectedFuelType, setSimulationRequest, setIsDrawingArea]);
+  }, [isDrawingArea, dragStart, map, data, activeFireClasses, setSelectedGroupHotspots, setDetectedFuelType, setSimulationRequest, setIsDrawingArea]);
 
   if (!isDrawingArea && !toastMessage) return null;
 

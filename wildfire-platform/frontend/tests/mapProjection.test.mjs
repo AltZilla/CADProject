@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { DEFAULT_MAP_PROJECTION, getProjectionSpecification } from '../src/components/Map/mapProjection.js';
 
-test('map defaults to a globe projection', () => {
-  assert.equal(DEFAULT_MAP_PROJECTION, 'globe');
+test('map defaults to a 2D mercator projection', () => {
+  assert.equal(DEFAULT_MAP_PROJECTION, 'mercator');
 });
 
 test('projection choices map to MapLibre projection specifications', () => {

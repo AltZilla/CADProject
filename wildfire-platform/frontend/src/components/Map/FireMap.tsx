@@ -85,6 +85,7 @@ export default function FireMap() {
         },
       }, map.getStyle().layers.find(l => l.type === 'symbol')?.id);
 
+      map.setProjection(getProjectionSpecification(DEFAULT_MAP_PROJECTION));
       setMapInstance(map);
       updateBbox();
     });

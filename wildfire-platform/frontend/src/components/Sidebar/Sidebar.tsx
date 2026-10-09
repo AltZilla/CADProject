@@ -19,10 +19,16 @@ export default function Sidebar() {
   const setSelectedHotspot = useAppStore(s => s.setSelectedHotspot);
   const setSimulationRequest = useAppStore(s => s.setSimulationRequest);
   const setDetectedFuelType = useAppStore(s => s.setDetectedFuelType);
+  const activeFireClasses = useAppStore(s => s.activeFireClasses);
   const { runSim } = useSimulation();
   const simulationLoading = useAppStore(s => s.simulationLoading);
 
-  const features = data?.features || [];
+  const rawFeatures = data?.features || [];
+  const features = rawFeatures.filter((f) => {
+    const props = f.properties || {};
+    const fc = props.fire_class ?? classifyHotspot(props).fire_class;
+    return activeFireClasses.has(fc as FireClass);
+  });
   const hotspots = features.map(f => f.properties);
   const detectionCount = hotspots.reduce((total, h) => total + getDetectionCount(h), 0);
   const topHotspots = hotspots

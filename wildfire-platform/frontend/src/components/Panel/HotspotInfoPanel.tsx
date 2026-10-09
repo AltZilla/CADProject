@@ -27,15 +27,21 @@ export default function HotspotInfoPanel() {
   const [weather, setWeather] = useState<LiveWeather | null>(null);
   const [loadingWeather, setLoadingWeather] = useState(false);
   
+  const activeFireClasses = useAppStore(s => s.activeFireClasses);
   const popupRef = useRef<maplibregl.Popup | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
   const complex = React.useMemo(() => {
     if (!hotspot) return null;
     if (getHotspotDisplayKind(hotspot) === 'aggregate') return null;
-    const detections = (data?.features || []).filter((feature) => feature.properties.clustered !== true);
+    const detections = (data?.features || [])
+      .filter((feature) => feature.properties.clustered !== true)
+      .filter((feature) => {
+        const fc = feature.properties.fire_class ?? classifyHotspot(feature.properties).fire_class;
+        return activeFireClasses.has(fc);
+      });
     return findFireComplex(hotspot.longitude, hotspot.latitude, detections, 12.0);
-  }, [hotspot, data]);
+  }, [hotspot, data, activeFireClasses]);
 
   // Auto-fetch live Open-Meteo weather whenever a hotspot is selected
   useEffect(() => {

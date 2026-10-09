@@ -666,29 +666,70 @@ export default function HotspotLayer() {
 
   return (
     <>
-      <div className="absolute left-3 top-16 z-30 w-[228px] rounded-lg border border-slate-700/90 bg-slate-950/90 px-3 py-2.5 text-slate-100 shadow-lg backdrop-blur-sm">
-        <div className="mb-2 flex items-center justify-between border-b border-slate-800 pb-1.5">
-          <span className="text-[11px] font-semibold text-slate-200">Fire Classification</span>
-          <span className="text-[9px] text-slate-400">Filter</span>
-        </div>
-        <div className="space-y-1.5">
-          {[
-            { cls: 'verified' as FireClass, label: 'Verified Wildfire', color: CLASS_COLORS.verified, dotSize: 'w-2.5 h-2.5' },
-            { cls: 'probable' as FireClass, label: 'Probable Wildfire', color: CLASS_COLORS.probable, dotSize: 'w-2.5 h-2.5' },
-            { cls: 'possible' as FireClass, label: 'Possible / Unverified', color: CLASS_COLORS.possible, dotSize: 'w-2 h-2' },
-            { cls: 'industrial' as FireClass, label: 'Suspected Industrial', color: CLASS_COLORS.industrial, dotSize: 'w-2 h-2' },
-          ].map(({ cls, label, color, dotSize }) => {
-            const isChecked = activeFireClasses.has(cls);
-            return (
-              <label
-                key={cls}
-                className="flex items-center justify-between text-[10px] text-slate-300 hover:text-white cursor-pointer select-none group py-0.5"
-              >
-                <div className="flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    checked={isChecked}
-                    onChange={() => {
+      {/* Collapsible Fire Classification Filter Panel */}
+      <div className="absolute left-3 top-16 z-30 transition-all duration-200">
+        {!isClassificationOpen ? (
+          <button
+            onClick={() => setIsClassificationOpen(true)}
+            className="flex items-center gap-2 rounded-full border border-slate-700/80 bg-slate-900/90 px-3 py-1.5 text-[11px] font-medium text-slate-200 shadow-xl backdrop-blur-md hover:border-slate-500 hover:bg-slate-800 transition-all group"
+            title="Show Fire Classification Filters"
+          >
+            <SlidersHorizontal size={13} className="text-orange-400 group-hover:rotate-45 transition-transform" />
+            <span>Fire Filters</span>
+            <span className="flex items-center -space-x-1 ml-0.5">
+              {Array.from(activeFireClasses).map((c) => (
+                <span
+                  key={c}
+                  className="inline-block w-2 h-2 rounded-full border border-slate-900"
+                  style={{ backgroundColor: CLASS_COLORS[c] }}
+                />
+              ))}
+            </span>
+            <ChevronRight size={13} className="text-slate-400 group-hover:translate-x-0.5 transition-transform ml-0.5" />
+          </button>
+        ) : (
+          <div className="w-[242px] rounded-xl border border-slate-700/90 bg-slate-900/95 p-3 text-slate-100 shadow-2xl backdrop-blur-md animate-in fade-in zoom-in-95 duration-150">
+            <div className="mb-2.5 flex items-center justify-between border-b border-slate-800 pb-2">
+              <div className="flex items-center gap-1.5">
+                <SlidersHorizontal size={13} className="text-orange-400" />
+                <span className="text-xs font-semibold text-slate-100">Fire Filters</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <button
+                  onClick={() => {
+                    if (activeFireClasses.size === 4) {
+                      setActiveFireClasses(new Set(['verified']));
+                    } else {
+                      setActiveFireClasses(new Set(['verified', 'probable', 'possible', 'industrial']));
+                    }
+                  }}
+                  className="text-[10px] text-orange-400 hover:text-orange-300 font-medium px-1.5 py-0.5 rounded hover:bg-slate-800 transition-colors"
+                >
+                  {activeFireClasses.size === 4 ? 'Verified only' : 'All'}
+                </button>
+                <button
+                  onClick={() => setIsClassificationOpen(false)}
+                  className="rounded p-1 text-slate-400 hover:bg-slate-800 hover:text-slate-200 transition-colors"
+                  title="Hide filter box"
+                  aria-label="Hide filter box"
+                >
+                  <ChevronLeft size={14} />
+                </button>
+              </div>
+            </div>
+
+            <div className="space-y-1">
+              {[
+                { cls: 'verified' as FireClass, label: 'Verified Wildfire', color: CLASS_COLORS.verified, desc: 'High-confidence thermal' },
+                { cls: 'probable' as FireClass, label: 'Probable Wildfire', color: CLASS_COLORS.probable, desc: 'Active fire behavior' },
+                { cls: 'possible' as FireClass, label: 'Possible / Unverified', color: CLASS_COLORS.possible, desc: 'Low signal or small heat' },
+                { cls: 'industrial' as FireClass, label: 'Suspected Industrial', color: CLASS_COLORS.industrial, desc: 'Gas flares & refineries' },
+              ].map(({ cls, label, color, desc }) => {
+                const isChecked = activeFireClasses.has(cls);
+                return (
+                  <div
+                    key={cls}
+                    onClick={() => {
                       const next = new Set(activeFireClasses);
                       if (next.has(cls)) {
                         if (next.size > 1) next.delete(cls);
@@ -697,18 +738,34 @@ export default function HotspotLayer() {
                       }
                       setActiveFireClasses(next);
                     }}
-                    className="accent-orange-500 rounded cursor-pointer w-3 h-3"
-                  />
-                  <span
-                    className={`inline-block rounded-full border border-white/60 ${dotSize} shrink-0`}
-                    style={{ backgroundColor: color }}
-                  />
-                  <span className={isChecked ? 'text-slate-200' : 'text-slate-500 line-through'}>{label}</span>
-                </div>
-              </label>
-            );
-          })}
-        </div>
+                    className={`flex items-center justify-between p-1.5 rounded-lg text-[11px] cursor-pointer select-none transition-colors ${
+                      isChecked ? 'bg-slate-800/60 hover:bg-slate-800 text-slate-200' : 'bg-transparent hover:bg-slate-800/30 text-slate-500'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <span
+                        className="inline-block w-2.5 h-2.5 rounded-full border border-white/40 shrink-0 transition-opacity"
+                        style={{ backgroundColor: color, opacity: isChecked ? 1 : 0.4 }}
+                      />
+                      <div className="flex flex-col">
+                        <span className={`font-medium leading-none ${isChecked ? 'text-slate-200' : 'text-slate-500 line-through'}`}>
+                          {label}
+                        </span>
+                        <span className="text-[9px] text-slate-400 leading-tight mt-0.5">{desc}</span>
+                      </div>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={isChecked}
+                      onChange={() => {}} // handled by parent div onClick
+                      className="accent-orange-500 rounded cursor-pointer w-3.5 h-3.5 shrink-0 pointer-events-none"
+                    />
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
       </div>
       {selectedGroupHotspots.length > 0 && (
         <div className="absolute top-16 left-1/2 -translate-x-1/2 z-40 flex items-center gap-3 bg-slate-900/95 backdrop-blur-md border border-amber-500/50 rounded-xl px-4 py-2.5 shadow-2xl">
