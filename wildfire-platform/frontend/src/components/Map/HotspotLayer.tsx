@@ -1,14 +1,15 @@
-import { useEffect, useRef, useMemo, type MutableRefObject } from 'react';
+import { useEffect, useRef, useMemo, useState, type MutableRefObject } from 'react';
 import maplibregl from 'maplibre-gl';
 import { useMap } from './MapContext';
 import { useAppStore } from '@/store/appStore';
 import { useHotspots } from '@/hooks/useHotspots';
 import { useSimulation } from '@/hooks/useSimulation';
 import { fetchLiveWeather, detectFuelType } from '@/api/weather';
-import { Zap, X, Flame } from 'lucide-react';
+import { Zap, X, Flame, SlidersHorizontal, ChevronRight, ChevronLeft } from 'lucide-react';
 import type { SimulationRequest } from '@/types/simulation';
-import type { Hotspot } from '@/types/hotspot';
+import type { Hotspot, FireClass } from '@/types/hotspot';
 import { getDetectionCount, getHotspotDisplayKind, getHotspotFrp, HOTSPOT_ZOOM } from '@/utils/hotspotPresentation.js';
+import { classifyHotspot, CLASS_COLORS } from '@/utils/classifyHotspot';
 
 function isPointInPoly(pt: [number, number], ring: number[][]): boolean {
   const [x, y] = pt;
@@ -64,6 +65,9 @@ export default function HotspotLayer() {
   const selectedGroupHotspots = useAppStore((s) => s.selectedGroupHotspots);
   const toggleGroupHotspot = useAppStore((s) => s.toggleGroupHotspot);
   const clearGroupHotspots = useAppStore((s) => s.clearGroupHotspots);
+  const activeFireClasses = useAppStore((s) => s.activeFireClasses);
+  const setActiveFireClasses = useAppStore((s) => s.setActiveFireClasses);
+  const [isClassificationOpen, setIsClassificationOpen] = useState(true);
   const { data } = useHotspots();
   const { runSim } = useSimulation();
   
@@ -74,6 +78,7 @@ export default function HotspotLayer() {
   const singletonCountLayerId = 'hotspots-singleton-count';
   const heatmapLayerId = 'hotspots-heatmap';
   const circleLayerId = 'hotspots-circle';
+  const verifiedGlowLayerId = 'hotspots-verified-glow';
   const aggregateLayerId = 'hotspots-aggregate';
   const aggregateCountLayerId = 'hotspots-aggregate-count';
   const selectedSourceId = 'hotspots-selected-source';
@@ -102,27 +107,38 @@ export default function HotspotLayer() {
     return polys;
   }, [simulationResult, playbackHour]);
 
-  // Enrich hotspot features with active vs burned status based on current fire perimeter
+  // Enrich hotspot features with active vs burned status and fire classification, and filter by activeFireClasses
   const enrichedData = useMemo(() => {
     if (!data?.features) return { type: 'FeatureCollection' as const, features: [] };
-    if (currentPerimeterPolys.length === 0) return data;
 
     const enrichedFeatures = data.features.map((feat) => {
       const coords = feat.geometry?.coordinates;
-      if (!coords) return feat;
-      const pt: [number, number] = [coords[0], coords[1]];
-      const isBurned = currentPerimeterPolys.some((ring) => isPointInPoly(pt, ring));
+      const pt: [number, number] = coords ? [coords[0], coords[1]] : [0, 0];
+      const isBurned = currentPerimeterPolys.length > 0 && currentPerimeterPolys.some((ring) => isPointInPoly(pt, ring));
+      const props = feat.properties || ({} as Hotspot);
+      const classified = props.fire_class
+        ? { fire_class: props.fire_class, class_reason: props.class_reason }
+        : classifyHotspot(props);
+
       return {
         ...feat,
         properties: {
-          ...feat.properties,
+          ...props,
           is_burned: isBurned,
+          fire_class: classified.fire_class,
+          class_reason: classified.class_reason,
         },
       };
     });
 
-    return { type: 'FeatureCollection' as const, features: enrichedFeatures };
-  }, [data, currentPerimeterPolys]);
+    // Filter by user-selected activeFireClasses
+    const filteredFeatures = enrichedFeatures.filter((f) => {
+      const fc = f.properties.fire_class ?? 'possible';
+      return activeFireClasses.has(fc as FireClass);
+    });
+
+    return { type: 'FeatureCollection' as const, features: filteredFeatures };
+  }, [data, currentPerimeterPolys, activeFireClasses]);
 
   useEffect(() => {
     if (!map) return;
@@ -135,7 +151,7 @@ export default function HotspotLayer() {
         buffer: 128,
         cluster: true,
         clusterRadius: 60,
-        clusterMaxZoom: 4,
+        clusterMaxZoom: 5,
         clusterProperties: {
           detection_count: ['+', ['to-number', ['coalesce', ['get', 'count'], 1]]],
           frp_total: ['+', ['to-number', ['coalesce', ['get', 'total_frp'], ['get', 'frp'], 0]]],
@@ -175,8 +191,8 @@ export default function HotspotLayer() {
             3.8, 0,
             4.5, 0.42,
             6, 0.38,
-            8.25, 0.34,
-            8.5, 0,
+            7.0, 0.30,
+            7.5, 0,
           ],
         },
       });
@@ -196,10 +212,10 @@ export default function HotspotLayer() {
             500, 24,
           ],
           'circle-color': '#f97316',
-          'circle-opacity': ['interpolate', ['linear'], ['zoom'], 3.8, 0.9, 4.5, 0],
+          'circle-opacity': ['interpolate', ['linear'], ['zoom'], 4.0, 0.9, 5.5, 0],
           'circle-stroke-color': '#fff7ed',
           'circle-stroke-width': 1.5,
-          'circle-stroke-opacity': ['interpolate', ['linear'], ['zoom'], 3.8, 0.9, 4.5, 0],
+          'circle-stroke-opacity': ['interpolate', ['linear'], ['zoom'], 4.0, 0.9, 5.5, 0],
         },
       });
 
@@ -216,7 +232,7 @@ export default function HotspotLayer() {
         },
         paint: {
           'text-color': '#fff',
-          'text-opacity': ['interpolate', ['linear'], ['zoom'], 3.8, 1, 4.5, 0],
+          'text-opacity': ['interpolate', ['linear'], ['zoom'], 4.0, 1, 5.5, 0],
           'text-halo-color': '#9a3412',
           'text-halo-width': 0.5,
         },
@@ -231,8 +247,15 @@ export default function HotspotLayer() {
         maxzoom: HOTSPOT_ZOOM.clustersEnd,
         paint: {
           'circle-radius': ['case', ['==', ['get', 'clustered'], true], 6, 3],
-          'circle-color': ['case', ['==', ['get', 'clustered'], true], '#ea580c', '#f97316'],
-          'circle-opacity': ['interpolate', ['linear'], ['zoom'], 3.8, 0.88, 4.5, 0],
+          'circle-color': [
+            'match', ['coalesce', ['get', 'fire_class'], 'possible'],
+            'verified', CLASS_COLORS.verified,
+            'probable', CLASS_COLORS.probable,
+            'possible', CLASS_COLORS.possible,
+            'industrial', CLASS_COLORS.industrial,
+            CLASS_COLORS.possible,
+          ],
+          'circle-opacity': ['interpolate', ['linear'], ['zoom'], 3.8, 0.88, 5.5, 0],
           'circle-stroke-color': '#fff7ed',
           'circle-stroke-width': 1,
         },
@@ -295,6 +318,32 @@ export default function HotspotLayer() {
         },
       });
 
+      // Verified Wildfire subtle pulsing glow ring
+      map.addLayer({
+        id: verifiedGlowLayerId,
+        type: 'circle',
+        source: sourceId,
+        filter: ['all', ['!', ['has', 'point_count']], ['==', ['get', 'fire_class'], 'verified']],
+        minzoom: HOTSPOT_ZOOM.pointsStart,
+        paint: {
+          'circle-radius': [
+            'interpolate', ['linear'], ['zoom'],
+            5, 8,
+            8, 12,
+            12, 17,
+          ],
+          'circle-color': 'rgba(220, 38, 38, 0)',
+          'circle-stroke-color': '#dc2626',
+          'circle-stroke-width': 1.6,
+          'circle-stroke-opacity': [
+            'interpolate', ['linear'], ['zoom'],
+            5.0, 0,
+            5.5, 0.65,
+          ],
+          'circle-blur': 0.4,
+        },
+      });
+
       map.addLayer({
         id: circleLayerId,
         type: 'circle',
@@ -303,20 +352,42 @@ export default function HotspotLayer() {
         minzoom: HOTSPOT_ZOOM.pointsStart,
         paint: {
           'circle-radius': [
-            'interpolate', ['linear'], ['to-number', ['coalesce', ['get', 'frp'], 0]],
-            0, 3,
-            25, 3.8,
-            100, 5,
-            300, 6.3,
+            'interpolate', ['linear'], ['zoom'],
+            5, [
+              'match', ['coalesce', ['get', 'fire_class'], 'possible'],
+              'verified', 5.0,
+              'probable', 4.0,
+              'possible', 3.0,
+              'industrial', 2.5,
+              3.5,
+            ],
+            10, [
+              'match', ['coalesce', ['get', 'fire_class'], 'possible'],
+              'verified', 7.5,
+              'probable', 5.5,
+              'possible', 4.0,
+              'industrial', 3.0,
+              4.5,
+            ],
           ],
           'circle-color': [
-            'interpolate', ['linear'], ['to-number', ['coalesce', ['get', 'frp'], 0]],
-            0, '#fbbf24',
-            25, '#f97316',
-            100, '#ef4444',
-            300, '#b91c1c',
+            'match', ['coalesce', ['get', 'fire_class'], 'possible'],
+            'verified', CLASS_COLORS.verified,
+            'probable', CLASS_COLORS.probable,
+            'possible', CLASS_COLORS.possible,
+            'industrial', CLASS_COLORS.industrial,
+            CLASS_COLORS.possible,
           ],
-          'circle-opacity': ['case', ['==', ['get', 'is_burned'], true], 0.48, 0.94],
+          'circle-opacity': [
+            'interpolate', ['linear'], ['zoom'],
+            5.0, 0,
+            5.5, [
+              'case',
+              ['==', ['get', 'is_burned'], true], 0.45,
+              ['==', ['get', 'fire_class'], 'industrial'], 0.55,
+              0.92,
+            ],
+          ],
           'circle-stroke-color': '#fff7ed',
           'circle-stroke-width': 1.25,
         },
@@ -503,7 +574,8 @@ export default function HotspotLayer() {
     // Keep hotspot and ignition markers elevated above 3D terrain fills
     const topLayers = [
       clusterLayerId, clusterCountLayerId, singletonLayerId, singletonCountLayerId,
-      aggregateLayerId, aggregateCountLayerId, circleLayerId, selectedHaloId, selectedCoreId, originHaloId, originCoreId,
+      aggregateLayerId, aggregateCountLayerId, verifiedGlowLayerId, circleLayerId,
+      selectedHaloId, selectedCoreId, originHaloId, originCoreId,
     ];
     topLayers.forEach((id) => {
       if (map && map.getLayer(id)) {
@@ -594,22 +666,48 @@ export default function HotspotLayer() {
 
   return (
     <>
-      <div className="absolute left-3 top-16 z-30 w-[214px] rounded-lg border border-slate-700/90 bg-slate-950/90 px-3 py-2.5 text-slate-100 shadow-lg backdrop-blur-sm">
-        <div className="mb-2 text-[11px] font-semibold text-slate-200">Hotspot key</div>
-        <div className="flex items-center justify-between gap-1.5 text-[10px] text-slate-400">
-          <span>Density</span>
-          <span>Sparse</span>
-          <span className="h-2 w-16 rounded-full bg-gradient-to-r from-amber-300 via-orange-500 to-red-700" aria-hidden="true" />
-          <span>Dense</span>
+      <div className="absolute left-3 top-16 z-30 w-[228px] rounded-lg border border-slate-700/90 bg-slate-950/90 px-3 py-2.5 text-slate-100 shadow-lg backdrop-blur-sm">
+        <div className="mb-2 flex items-center justify-between border-b border-slate-800 pb-1.5">
+          <span className="text-[11px] font-semibold text-slate-200">Fire Classification</span>
+          <span className="text-[9px] text-slate-400">Filter</span>
         </div>
-        <div className="mt-2 flex items-center justify-between gap-2 text-[10px] text-slate-400">
-          <span>FRP (MW)</span>
-          <span className="flex items-center gap-2" aria-label="Marker color and size increase with FRP">
-            <i className="h-2 w-2 rounded-full border border-orange-100 bg-amber-400" />
-            <i className="h-2.5 w-2.5 rounded-full border border-orange-100 bg-orange-500" />
-            <i className="h-3 w-3 rounded-full border border-orange-100 bg-red-600" />
-          </span>
-          <span>Higher</span>
+        <div className="space-y-1.5">
+          {[
+            { cls: 'verified' as FireClass, label: 'Verified Wildfire', color: CLASS_COLORS.verified, dotSize: 'w-2.5 h-2.5' },
+            { cls: 'probable' as FireClass, label: 'Probable Wildfire', color: CLASS_COLORS.probable, dotSize: 'w-2.5 h-2.5' },
+            { cls: 'possible' as FireClass, label: 'Possible / Unverified', color: CLASS_COLORS.possible, dotSize: 'w-2 h-2' },
+            { cls: 'industrial' as FireClass, label: 'Suspected Industrial', color: CLASS_COLORS.industrial, dotSize: 'w-2 h-2' },
+          ].map(({ cls, label, color, dotSize }) => {
+            const isChecked = activeFireClasses.has(cls);
+            return (
+              <label
+                key={cls}
+                className="flex items-center justify-between text-[10px] text-slate-300 hover:text-white cursor-pointer select-none group py-0.5"
+              >
+                <div className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={isChecked}
+                    onChange={() => {
+                      const next = new Set(activeFireClasses);
+                      if (next.has(cls)) {
+                        if (next.size > 1) next.delete(cls);
+                      } else {
+                        next.add(cls);
+                      }
+                      setActiveFireClasses(next);
+                    }}
+                    className="accent-orange-500 rounded cursor-pointer w-3 h-3"
+                  />
+                  <span
+                    className={`inline-block rounded-full border border-white/60 ${dotSize} shrink-0`}
+                    style={{ backgroundColor: color }}
+                  />
+                  <span className={isChecked ? 'text-slate-200' : 'text-slate-500 line-through'}>{label}</span>
+                </div>
+              </label>
+            );
+          })}
         </div>
       </div>
       {selectedGroupHotspots.length > 0 && (

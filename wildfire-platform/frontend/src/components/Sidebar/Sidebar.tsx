@@ -9,6 +9,8 @@ import Button from '../UI/Button';
 import { formatPoint } from '@/utils/geo';
 import { findFireComplex } from '@/utils/clustering';
 import { getDetectionCount, getHotspotDisplayKind } from '@/utils/hotspotPresentation.js';
+import type { FireClass } from '@/types/hotspot';
+import { classifyHotspot, CLASS_SHORT_LABELS, CLASS_STYLES } from '@/utils/classifyHotspot';
 
 export default function Sidebar() {
   const activeTab = useAppStore(s => s.activeTab);
@@ -25,8 +27,23 @@ export default function Sidebar() {
   const detectionCount = hotspots.reduce((total, h) => total + getDetectionCount(h), 0);
   const topHotspots = hotspots
     .filter(h => getHotspotDisplayKind(h) === 'detection')
-    .sort((a, b) => (b.frp ?? 0) - (a.frp ?? 0))
-    .slice(0, 8);
+    .map(h => {
+      const cls = h.fire_class ?? classifyHotspot(h).fire_class;
+      return { ...h, fire_class: cls };
+    })
+    .sort((a, b) => {
+      const classPriority: Record<string, number> = {
+        verified: 0,
+        probable: 1,
+        possible: 2,
+        industrial: 3,
+      };
+      const pA = classPriority[a.fire_class ?? 'possible'] ?? 2;
+      const pB = classPriority[b.fire_class ?? 'possible'] ?? 2;
+      if (pA !== pB) return pA - pB;
+      return (b.frp ?? 0) - (a.frp ?? 0);
+    })
+    .slice(0, 10);
   const hasAggregates = hotspots.some(h => getHotspotDisplayKind(h) === 'aggregate');
 
   const handleQuickSim = async (h: any) => {
@@ -132,7 +149,14 @@ export default function Sidebar() {
                     onClick={() => setSelectedHotspot(h)}
                   >
                     <div className="flex justify-between items-center mb-1">
-                      <span className="text-sm font-medium text-slate-200">{(h.frp ?? h.total_frp ?? 0).toFixed(1)} MW</span>
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-sm font-medium text-slate-200">{(h.frp ?? h.total_frp ?? 0).toFixed(1)} MW</span>
+                        {h.fire_class && (
+                          <span className={`text-[9px] font-semibold px-1.5 py-0.2 rounded border ${CLASS_STYLES[h.fire_class as FireClass]}`}>
+                            {CLASS_SHORT_LABELS[h.fire_class as FireClass]}
+                          </span>
+                        )}
+                      </div>
                       <div className="flex items-center gap-1.5">
                         <span className="text-xs text-slate-400">{h.satellite || 'VIIRS'}</span>
                       <button

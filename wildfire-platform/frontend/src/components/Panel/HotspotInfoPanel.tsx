@@ -12,6 +12,7 @@ import { formatPoint } from '@/utils/geo';
 import { useHotspots } from '@/hooks/useHotspots';
 import { findFireComplex } from '@/utils/clustering';
 import { getDetectionCount, getHotspotDisplayKind, getHotspotFrp } from '@/utils/hotspotPresentation.js';
+import { classifyHotspot, CLASS_LABELS, CLASS_STYLES } from '@/utils/classifyHotspot';
 
 export default function HotspotInfoPanel() {
   const map = useMap();
@@ -127,6 +128,27 @@ export default function HotspotInfoPanel() {
             <X size={14} />
           </button>
         </div>
+
+        {/* Classification Banner */}
+        {getHotspotDisplayKind(hotspot) === 'detection' && (() => {
+          const clsInfo = hotspot.fire_class
+            ? { fire_class: hotspot.fire_class, class_reason: hotspot.class_reason }
+            : classifyHotspot(hotspot);
+          const fc = clsInfo.fire_class;
+          return (
+            <div className={`p-2 rounded-lg border mb-2.5 text-xs ${CLASS_STYLES[fc]}`}>
+              <div className="flex items-center justify-between font-semibold">
+                <span>{CLASS_LABELS[fc]}</span>
+                <span className="text-[10px] opacity-80 uppercase tracking-wide">Status</span>
+              </div>
+              {clsInfo.class_reason && (
+                <p className="text-[10px] mt-1 text-slate-300/90 leading-tight">
+                  {clsInfo.class_reason}
+                </p>
+              )}
+            </div>
+          );
+        })()}
 
         {/* Hotspot Satellite Readings */}
         <div className="space-y-1 text-slate-300 text-xs mb-3">

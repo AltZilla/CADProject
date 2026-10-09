@@ -1,8 +1,8 @@
 export const HOTSPOT_ZOOM = {
-  clustersEnd: 4.5,
   densityStart: 3.8,
-  densityEnd: 8.5,
-  pointsStart: 8.5,
+  densityEnd: 7.5,
+  clustersEnd: 5.5,
+  pointsStart: 5.0,
 };
 
 export function getHotspotDisplayKind(properties) {

@@ -1,3 +1,5 @@
+export type FireClass = 'verified' | 'probable' | 'possible' | 'industrial';
+
 export interface Hotspot {
   hotspot_id: string;
   latitude: number;
@@ -15,6 +17,8 @@ export interface Hotspot {
   clustered?: boolean;
   count?: number; // for clustered points
   total_frp?: number; // for clustered points
+  fire_class?: FireClass;
+  class_reason?: string;
 }
 
 export type HotspotFeature = GeoJSON.Feature<GeoJSON.Point, Hotspot>;
