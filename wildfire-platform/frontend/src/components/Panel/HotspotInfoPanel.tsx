@@ -11,6 +11,8 @@ import { formatPoint } from '@/utils/geo';
 
 import { useHotspots } from '@/hooks/useHotspots';
 import { findFireComplex } from '@/utils/clustering';
+import { getDetectionCount, getHotspotDisplayKind, getHotspotFrp } from '@/utils/hotspotPresentation.js';
+import { classifyHotspot, CLASS_LABELS, CLASS_STYLES } from '@/utils/classifyHotspot';
 
 export default function HotspotInfoPanel() {
   const map = useMap();
@@ -25,18 +27,31 @@ export default function HotspotInfoPanel() {
   const [weather, setWeather] = useState<LiveWeather | null>(null);
   const [loadingWeather, setLoadingWeather] = useState(false);
   
+  const activeFireClasses = useAppStore(s => s.activeFireClasses);
   const popupRef = useRef<maplibregl.Popup | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
   const complex = React.useMemo(() => {
     if (!hotspot) return null;
-    return findFireComplex(hotspot.longitude, hotspot.latitude, data?.features || [], 12.0);
-  }, [hotspot, data]);
+    if (getHotspotDisplayKind(hotspot) === 'aggregate') return null;
+    const detections = (data?.features || [])
+      .filter((feature) => feature.properties.clustered !== true)
+      .filter((feature) => {
+        const fc = feature.properties.fire_class ?? classifyHotspot(feature.properties).fire_class;
+        return activeFireClasses.has(fc);
+      });
+    return findFireComplex(hotspot.longitude, hotspot.latitude, detections, 12.0);
+  }, [hotspot, data, activeFireClasses]);
 
   // Auto-fetch live Open-Meteo weather whenever a hotspot is selected
   useEffect(() => {
     if (!hotspot) {
       setWeather(null);
+      return;
+    }
+    if (getHotspotDisplayKind(hotspot) === 'aggregate') {
+      setWeather(null);
+      setLoadingWeather(false);
       return;
     }
 
@@ -82,6 +97,7 @@ export default function HotspotInfoPanel() {
   if (!hotspot) return null;
 
   const handleAutoSimulate = () => {
+    if (getHotspotDisplayKind(hotspot) === 'aggregate') return;
     const fuelType = weather ? detectFuelType(weather) : 'SHRUB_CHAPARRAL';
     const points = complex?.points && complex.points.length > 0 ? complex.points : [[hotspot.longitude, hotspot.latitude] as [number, number]];
     const req = {
@@ -107,46 +123,93 @@ export default function HotspotInfoPanel() {
             <Flame size={16} />
           </div>
           <div>
-            <h4 className="font-semibold text-slate-100 text-xs">NASA FIRMS Active Fire</h4>
-            <p className="text-[10px] text-slate-400">{hotspot.satellite} · {hotspot.instrument}</p>
+            <h4 className="font-semibold text-slate-100 text-xs">
+              {getHotspotDisplayKind(hotspot) === 'aggregate' ? 'Aggregated FIRMS detections' : 'NASA FIRMS Active Fire'}
+            </h4>
+            {getHotspotDisplayKind(hotspot) === 'detection' && (
+              <p className="text-[10px] text-slate-400">{[hotspot.satellite, hotspot.instrument].filter(Boolean).join(' · ')}</p>
+            )}
           </div>
           <button onClick={() => setSelectedHotspot(null)} className="ml-auto text-slate-400 hover:text-slate-200">
             <X size={14} />
           </button>
         </div>
 
+        {/* Classification Banner */}
+        {getHotspotDisplayKind(hotspot) === 'detection' && (() => {
+          const clsInfo = hotspot.fire_class
+            ? { fire_class: hotspot.fire_class, class_reason: hotspot.class_reason }
+            : classifyHotspot(hotspot);
+          const fc = clsInfo.fire_class;
+          return (
+            <div className={`p-2 rounded-lg border mb-2.5 text-xs ${CLASS_STYLES[fc]}`}>
+              <div className="flex items-center justify-between font-semibold">
+                <span>{CLASS_LABELS[fc]}</span>
+                <span className="text-[10px] opacity-80 uppercase tracking-wide">Status</span>
+              </div>
+              {clsInfo.class_reason && (
+                <p className="text-[10px] mt-1 text-slate-300/90 leading-tight">
+                  {clsInfo.class_reason}
+                </p>
+              )}
+            </div>
+          );
+        })()}
+
         {/* Hotspot Satellite Readings */}
         <div className="space-y-1 text-slate-300 text-xs mb-3">
           <div className="flex justify-between py-0.5">
-            <span className="text-slate-400">Coordinates:</span>
+            <span className="text-slate-400">{getHotspotDisplayKind(hotspot) === 'aggregate' ? 'Approx. center:' : 'Coordinates:'}</span>
             <span className="font-mono text-slate-200">
               {formatPoint([(hotspot.longitude ?? hotspot.lon ?? 0), (hotspot.latitude ?? hotspot.lat ?? 0)])}
             </span>
           </div>
-          <div className="flex justify-between py-0.5">
-            <span className="text-slate-400">Fire Radiative Power:</span>
-            <span className="font-semibold text-orange-400 flex items-center gap-1">
-              ⚡ {(hotspot.frp ?? hotspot.total_frp ?? 0).toFixed(1)} MW <Badge confidence={hotspot.confidence ?? 80} />
-            </span>
-          </div>
-          <div className="flex justify-between py-0.5">
-            <span className="text-slate-400">Brightness Temp:</span>
-            <span>{(hotspot.brightness ?? 330).toFixed(1)} K</span>
-          </div>
-          <div className="flex justify-between py-0.5">
-            <span className="text-slate-400">Detection Time:</span>
-            <span>
-              {(() => {
-                if (!hotspot.acq_datetime) return 'Recent';
-                const d = new Date(hotspot.acq_datetime);
-                return isNaN(d.getTime()) ? String(hotspot.acq_datetime) : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-              })()} ({hotspot.daynight === 'D' ? 'Day' : 'Night'})
-            </span>
-          </div>
+          {getHotspotDisplayKind(hotspot) === 'aggregate' ? (
+            <>
+              <div className="flex justify-between py-0.5">
+                <span className="text-slate-400">Detections:</span>
+                <span>{getDetectionCount(hotspot).toLocaleString()}</span>
+              </div>
+              <div className="flex justify-between py-0.5">
+                <span className="text-slate-400">Total FRP:</span>
+                <span className="font-semibold text-orange-400">{getHotspotFrp(hotspot).toFixed(1)} MW</span>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="flex justify-between py-0.5">
+                <span className="text-slate-400">Fire Radiative Power:</span>
+                <span className="font-semibold text-orange-400 flex items-center gap-1">
+                  {Number.isFinite(hotspot.frp) ? `${hotspot.frp!.toFixed(1)} MW` : 'Unavailable'}
+                  {Number.isFinite(hotspot.confidence) && (
+                    <>
+                      <span className="text-slate-300">{Math.round(hotspot.confidence!)}% confidence</span>
+                      <Badge confidence={hotspot.confidence!} />
+                    </>
+                  )}
+                </span>
+              </div>
+              {Number.isFinite(hotspot.brightness) && (
+                <div className="flex justify-between py-0.5">
+                  <span className="text-slate-400">Brightness Temp:</span>
+                  <span>{hotspot.brightness!.toFixed(1)} K</span>
+                </div>
+              )}
+              <div className="flex justify-between py-0.5">
+                <span className="text-slate-400">Detection Time:</span>
+                <span>
+                  {hotspot.acq_datetime && !Number.isNaN(new Date(hotspot.acq_datetime).getTime())
+                    ? new Date(hotspot.acq_datetime).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })
+                    : 'Unavailable'}
+                  {hotspot.daynight ? ` (${hotspot.daynight === 'D' ? 'Day' : 'Night'})` : ''}
+                </span>
+              </div>
+            </>
+          )}
         </div>
 
         {/* Live Weather Card (Open-Meteo) */}
-        <div className="bg-slate-800/80 border border-slate-700/60 rounded-lg p-2.5 mb-3 text-xs">
+        {getHotspotDisplayKind(hotspot) === 'detection' && <div className="bg-slate-800/80 border border-slate-700/60 rounded-lg p-2.5 mb-3 text-xs">
           <div className="flex items-center justify-between text-[11px] font-medium text-slate-300 mb-1.5">
             <span className="flex items-center gap-1 text-cyan-400">
               <Wind size={13} /> Live Weather (Open-Meteo)
@@ -174,18 +237,20 @@ export default function HotspotInfoPanel() {
           ) : (
             <div className="text-slate-400 text-center py-1">Connecting to Open-Meteo station...</div>
           )}
-        </div>
+        </div>}
 
         {/* 1-Click Auto Simulation Button */}
-        <Button 
-          size="sm" 
-          className="w-full bg-gradient-to-r from-orange-500 to-red-600 hover:from-orange-600 hover:to-red-700 text-white font-medium py-2 shadow-lg shadow-orange-500/20 text-xs" 
-          onClick={handleAutoSimulate}
-          loading={loading}
-        >
-          <Zap size={14} className="mr-1.5 fill-current" />
-          {complex && complex.count > 1 ? `Simulate Entire Complex (${complex.count} pts)` : 'Auto-Simulate Spread Forecast'}
-        </Button>
+        {getHotspotDisplayKind(hotspot) === 'detection' && (
+          <Button
+            size="sm"
+            className="w-full bg-orange-600 hover:bg-orange-700 text-white font-medium py-2 text-xs"
+            onClick={handleAutoSimulate}
+            loading={loading}
+          >
+            <Zap size={14} className="mr-1.5 fill-current" />
+            {complex && complex.count > 1 ? `Simulate Nearby Detections (${complex.count})` : 'Auto-Simulate Spread Forecast'}
+          </Button>
+        )}
       </div>
     </div>
   );

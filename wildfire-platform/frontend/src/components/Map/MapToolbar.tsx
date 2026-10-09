@@ -1,14 +1,18 @@
 import React from 'react';
 import { useAppStore } from '@/store/appStore';
 import { useHotspots } from '@/hooks/useHotspots';
-import { Flame, RefreshCw, Crosshair, Mountain, CheckSquare, SquareDashed } from 'lucide-react';
+import { Flame, RefreshCw, Crosshair, Mountain, CheckSquare, SquareDashed, Globe2, Map as MapIcon } from 'lucide-react';
+import type { MapProjection } from './mapProjection.js';
+import { getDetectionCount } from '@/utils/hotspotPresentation.js';
 
 interface MapToolbarProps {
   is3D?: boolean;
   onToggle3D?: () => void;
+  projection: MapProjection;
+  onProjectionChange: (projection: MapProjection) => void;
 }
 
-export default function MapToolbar({ is3D, onToggle3D }: MapToolbarProps) {
+export default function MapToolbar({ is3D, onToggle3D, projection, onProjectionChange }: MapToolbarProps) {
   const isPickingOrigin = useAppStore(s => s.isPickingOrigin);
   const setIsPickingOrigin = useAppStore(s => s.setIsPickingOrigin);
   const isSelectingGroup = useAppStore(s => s.isSelectingGroup);
@@ -18,7 +22,7 @@ export default function MapToolbar({ is3D, onToggle3D }: MapToolbarProps) {
   const selectedGroupHotspots = useAppStore(s => s.selectedGroupHotspots);
   const { data, refetch, isFetching } = useHotspots();
   
-  const count = data?.features?.length ?? 0;
+  const count = data?.features?.reduce((total, feature) => total + getDetectionCount(feature.properties), 0) ?? 0;
 
   return (
     <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1.5 bg-slate-900/90 backdrop-blur-sm border border-slate-700/80 rounded-full px-2 py-1 shadow-lg">
@@ -93,6 +97,36 @@ export default function MapToolbar({ is3D, onToggle3D }: MapToolbarProps) {
       >
         <Crosshair size={14} />
       </button>
+
+      <div className="w-px h-5 bg-slate-700" />
+      <div role="group" aria-label="Map projection" className="flex items-center gap-0.5 rounded-full bg-slate-800/80 p-0.5">
+        <button
+          onClick={() => onProjectionChange('globe')}
+          aria-label="Globe projection"
+          aria-pressed={projection === 'globe'}
+          className={`p-1.5 rounded-full transition-colors ${
+            projection === 'globe'
+              ? 'text-sky-300 bg-sky-500/20'
+              : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700'
+          }`}
+          title="Globe view"
+        >
+          <Globe2 size={14} />
+        </button>
+        <button
+          onClick={() => onProjectionChange('mercator')}
+          aria-label="Flat map projection"
+          aria-pressed={projection === 'mercator'}
+          className={`p-1.5 rounded-full transition-colors ${
+            projection === 'mercator'
+              ? 'text-sky-300 bg-sky-500/20'
+              : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700'
+          }`}
+          title="Flat map view"
+        >
+          <MapIcon size={14} />
+        </button>
+      </div>
 
       {onToggle3D && (
         <button

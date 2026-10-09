@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Hotspot } from '../types/hotspot';
+import type { Hotspot, FireClass } from '../types/hotspot';
 import type { FuelType, SimulationRequest, SimulationResult } from '../types/simulation';
 import type { AlertZone } from '../types/alert';
 
@@ -65,6 +65,10 @@ interface AppState {
   setIsDrawingArea: (v: boolean) => void;
   drawnAreaBounds: { start: [number, number]; end: [number, number] } | null;
   setDrawnAreaBounds: (b: { start: [number, number]; end: [number, number] } | null) => void;
+
+  // Fire classification filter
+  activeFireClasses: Set<FireClass>;
+  setActiveFireClasses: (classes: Set<FireClass>) => void;
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -172,4 +176,7 @@ export const useAppStore = create<AppState>((set) => ({
   setIsDrawingArea: (v) => set({ isDrawingArea: v }),
   drawnAreaBounds: null,
   setDrawnAreaBounds: (b) => set({ drawnAreaBounds: b }),
+
+  activeFireClasses: new Set<FireClass>(['verified', 'probable', 'possible', 'industrial']),
+  setActiveFireClasses: (classes) => set({ activeFireClasses: classes }),
 }));

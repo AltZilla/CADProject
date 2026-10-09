@@ -44,6 +44,53 @@ HOTSPOT_SATS = []
 HOTSPOT_DAYNIGHTS = []
 LAST_FIRMS_FETCH = 0
 
+# Known industrial thermal source regions (gas flares, refineries, smelters)
+# Each entry: (min_lon, min_lat, max_lon, max_lat, label)
+INDUSTRIAL_ZONES = [
+    (-104, 31, -96, 36, "Permian Basin gas flares"),
+    (-97, 49, -93, 53, "Alberta oil sands"),
+    (50, 20, 60, 28, "Gulf/Arabian Peninsula"),
+    (55, 55, 75, 72, "Siberian gas fields"),
+    (5, 4, 9, 8, "Niger Delta"),
+    (29, 53, 37, 58, "Russian Volga-Ural"),
+    (-66, 7, -60, 12, "Venezuelan Orinoco"),
+    (102, 36, 118, 43, "North China industrial"),
+]
+
+def in_industrial_zone(lat, lon):
+    for min_lon, min_lat, max_lon, max_lat, _ in INDUSTRIAL_ZONES:
+        if min_lon <= lon <= max_lon and min_lat <= lat <= max_lat:
+            return True
+    return False
+
+def classify_hotspot(lat, lon, frp, brightness, confidence, daynight):
+    """
+    Returns (fire_class, class_reason) where fire_class is one of:
+    'verified' | 'probable' | 'possible' | 'industrial'
+    """
+    # Rule 1: Night-time + moderate FRP + high steady brightness in industrial zone
+    if daynight == 'N' and in_industrial_zone(lat, lon) and brightness > 370 and frp < 80:
+        return 'industrial', 'Night-time detection in known industrial/gas flare region'
+
+    # Rule 2: Very high brightness, steady, night = likely industrial furnace / smelter
+    if daynight == 'N' and brightness > 420 and frp < 50:
+        return 'industrial', 'Persistent high-brightness night-time source (possible gas flare or furnace)'
+
+    # Rule 3: Low confidence from FIRMS sensor
+    if confidence < 50:
+        return 'possible', f'Low FIRMS sensor confidence ({confidence}%)'
+
+    # Rule 4: Verified — high confidence + strong FRP + high brightness
+    if confidence >= 80 and frp >= 50 and brightness >= 330:
+        return 'verified', f'High confidence VIIRS ({confidence}%), {frp:.0f} MW FRP, {brightness:.0f} K'
+
+    # Rule 5: Probable — nominal confidence + meaningful FRP
+    if confidence >= 60 and frp >= 15:
+        return 'probable', f'Nominal confidence ({confidence}%), {frp:.0f} MW FRP'
+
+    # Default
+    return 'possible', f'Insufficient data for high-confidence classification ({confidence}%, {frp:.1f} MW)'
+
 ALERT_ZONES = [
     {
         "zone_id": "zone-1",
@@ -159,34 +206,41 @@ class WildfireDevHandler(BaseHTTPRequestHandler):
                 )
                 indices = np.where(in_bbox)[0]
                 
-                # Limit density when zoomed out for smooth rendering, but allow high density (up to 5000)
+                # Unbiased stride sampling when too many hotspots (prevents cluster jump)
                 max_return = 5000
                 if len(indices) > max_return:
-                    # Select the highest FRP hotspots in current view
-                    sub_frps = HOTSPOT_FRPS[indices]
-                    top_k = np.argsort(sub_frps)[-max_return:]
-                    indices = indices[top_k]
+                    stride = max(1, len(indices) // max_return)
+                    indices = indices[::stride][:max_return]
                     
                 features = []
                 for idx in indices:
+                    lat = round(float(HOTSPOT_LATS[idx]), 4)
+                    lon = round(float(HOTSPOT_LONS[idx]), 4)
+                    frp = round(float(HOTSPOT_FRPS[idx]), 1)
+                    bright = round(float(HOTSPOT_BRIGHTS[idx]), 1)
+                    conf = int(HOTSPOT_CONFS[idx])
+                    daynight = HOTSPOT_DAYNIGHTS[idx]
+                    fire_class, class_reason = classify_hotspot(lat, lon, frp, bright, conf, daynight)
                     features.append({
                         "type": "Feature",
                         "geometry": {
                             "type": "Point",
-                            "coordinates": [round(float(HOTSPOT_LONS[idx]), 4), round(float(HOTSPOT_LATS[idx]), 4)]
+                            "coordinates": [lon, lat]
                         },
                         "properties": {
                             "hotspot_id": f"firms-{idx+1}",
-                            "latitude": round(float(HOTSPOT_LATS[idx]), 4),
-                            "longitude": round(float(HOTSPOT_LONS[idx]), 4),
-                            "brightness": round(float(HOTSPOT_BRIGHTS[idx]), 1),
-                            "frp": round(float(HOTSPOT_FRPS[idx]), 1),
-                            "confidence": int(HOTSPOT_CONFS[idx]),
+                            "latitude": lat,
+                            "longitude": lon,
+                            "brightness": bright,
+                            "frp": frp,
+                            "confidence": conf,
                             "satellite": HOTSPOT_SATS[idx],
                             "instrument": "VIIRS",
                             "acq_datetime": HOTSPOT_DATES[idx],
-                            "daynight": HOTSPOT_DAYNIGHTS[idx],
-                            "region_key": f"{round(float(HOTSPOT_LATS[idx]), 1)}#{round(float(HOTSPOT_LONS[idx]), 1)}"
+                            "daynight": daynight,
+                            "region_key": f"{round(lat, 1)}#{round(lon, 1)}",
+                            "fire_class": fire_class,
+                            "class_reason": class_reason,
                         }
                     })
                 data = {"type": "FeatureCollection", "features": features}
