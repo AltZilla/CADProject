@@ -38,6 +38,16 @@ export function useHotspots() {
 
   const mergedData: HotspotFeatureCollection = useMemo(() => {
     if (query.data?.features) {
+      // If incoming data has individual unclustered points, purge coarse cluster items so they never linger
+      const hasUnclustered = query.data.features.some((f: any) => !f.properties?.clustered);
+      if (hasUnclustered) {
+        for (const [id, cached] of globalHotspotCache.entries()) {
+          if (cached.properties?.clustered) {
+            globalHotspotCache.delete(id);
+          }
+        }
+      }
+
       query.data.features.forEach((f: any) => {
         const id = f.properties?.hotspot_id || `${f.geometry?.coordinates?.[0]},${f.geometry?.coordinates?.[1]}`;
         globalHotspotCache.set(id, f);

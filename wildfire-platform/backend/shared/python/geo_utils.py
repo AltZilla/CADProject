@@ -57,6 +57,16 @@ def hotspots_to_geojson(records: list[dict]) -> dict:
             "daynight": str(r.get('daynight', 'D')),
             "region_key": str(r.get('region_key', ''))
         }
+        if 'fire_class' in r:
+            props['fire_class'] = r['fire_class']
+        if 'class_reason' in r:
+            props['class_reason'] = r['class_reason']
+        if 'clustered' in r:
+            props['clustered'] = r['clustered']
+        if 'count' in r:
+            props['count'] = r['count']
+        if 'total_frp' in r:
+            props['total_frp'] = float(r['total_frp'])
         features.append(make_geojson_feature(geom, props))
     return make_feature_collection(features)
 
